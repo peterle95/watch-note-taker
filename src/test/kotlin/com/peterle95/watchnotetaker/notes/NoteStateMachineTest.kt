@@ -5,6 +5,20 @@ import kotlin.test.assertEquals
 
 class NoteStateMachineTest {
     @Test
+    fun `completed transcription enters the review queue exactly once`() {
+        val transcribingNote = note(status = NoteStatus.TRANSCRIBING)
+
+        val ready = NoteStateMachine.execute(transcribingNote, NoteCommand.MarkReadyForReview)
+        val repeatedCompletion = NoteStateMachine.execute(ready.note, NoteCommand.MarkReadyForReview)
+
+        assertEquals(TransitionDisposition.APPLIED, ready.disposition)
+        assertEquals(NoteStatus.READY_FOR_REVIEW, ready.note.status)
+        assertEquals(transcribingNote.transcript, ready.note.transcript)
+        assertEquals(TransitionDisposition.ALREADY_APPLIED, repeatedCompletion.disposition)
+        assertEquals(ready.note, repeatedCompletion.note)
+    }
+
+    @Test
     fun `approving a ready note preserves its transcript and is idempotent`() {
         val readyNote = note(status = NoteStatus.READY_FOR_REVIEW)
 
@@ -34,40 +48,48 @@ class NoteStateMachineTest {
     }
 
     @Test
-    fun `only approved notes can enter delivery states`() {
+    fun `only active delivery attempts can produce delivery states`() {
         val readyNote = note(status = NoteStatus.READY_FOR_REVIEW)
-        val attemptedDelivery = NoteStateMachine.execute(readyNote, NoteCommand.MarkDelivered)
+        val attemptedDelivery = NoteStateMachine.execute(readyNote, NoteCommand.MarkDelivered(attempt = 1))
 
         assertEquals(TransitionDisposition.INVALID, attemptedDelivery.disposition)
         assertEquals(readyNote, attemptedDelivery.note)
     }
 
     @Test
-    fun `delivery failure preserves approved transcript and can be retried`() {
+    fun `delivery failure preserves transcript through retry and delivery`() {
         val approvedNote = note(status = NoteStatus.APPROVED)
-
-        val failed = NoteStateMachine.execute(approvedNote, NoteCommand.MarkDeliveryFailed)
+        val firstAttempt = NoteStateMachine.execute(approvedNote, NoteCommand.BeginDelivery)
+        val failed = NoteStateMachine.execute(firstAttempt.note, NoteCommand.MarkDeliveryFailed(attempt = 1))
         val retried = NoteStateMachine.execute(failed.note, NoteCommand.RetryDelivery)
-        val delivered = NoteStateMachine.execute(retried.note, NoteCommand.MarkDelivered)
+        val secondAttempt = NoteStateMachine.execute(retried.note, NoteCommand.BeginDelivery)
+        val delivered = NoteStateMachine.execute(secondAttempt.note, NoteCommand.MarkDelivered(attempt = 2))
 
         assertEquals(NoteStatus.DELIVERY_FAILED, failed.note.status)
-        assertEquals(approvedNote.transcript, failed.note.transcript)
         assertEquals(NoteStatus.APPROVED, retried.note.status)
         assertEquals(NoteStatus.DELIVERED, delivered.note.status)
+        assertEquals(approvedNote.transcript, failed.note.transcript)
+        assertEquals(approvedNote.transcript, retried.note.transcript)
+        assertEquals(approvedNote.transcript, delivered.note.transcript)
     }
 
     @Test
-    fun `completed transcription enters the review queue exactly once`() {
-        val transcribingNote = note(status = NoteStatus.TRANSCRIBING)
+    fun `stale delivery callbacks cannot overwrite a retried attempt`() {
+        val approvedNote = note(status = NoteStatus.APPROVED)
+        val firstAttempt = NoteStateMachine.execute(approvedNote, NoteCommand.BeginDelivery)
+        val failed = NoteStateMachine.execute(firstAttempt.note, NoteCommand.MarkDeliveryFailed(attempt = 1))
+        val retried = NoteStateMachine.execute(failed.note, NoteCommand.RetryDelivery)
+        val secondAttempt = NoteStateMachine.execute(retried.note, NoteCommand.BeginDelivery)
 
-        val ready = NoteStateMachine.execute(transcribingNote, NoteCommand.MarkReadyForReview)
-        val repeatedCompletion = NoteStateMachine.execute(ready.note, NoteCommand.MarkReadyForReview)
+        val staleSuccess = NoteStateMachine.execute(secondAttempt.note, NoteCommand.MarkDelivered(attempt = 1))
+        val staleFailure = NoteStateMachine.execute(secondAttempt.note, NoteCommand.MarkDeliveryFailed(attempt = 1))
+        val delivered = NoteStateMachine.execute(secondAttempt.note, NoteCommand.MarkDelivered(attempt = 2))
 
-        assertEquals(TransitionDisposition.APPLIED, ready.disposition)
-        assertEquals(NoteStatus.READY_FOR_REVIEW, ready.note.status)
-        assertEquals(transcribingNote.transcript, ready.note.transcript)
-        assertEquals(TransitionDisposition.ALREADY_APPLIED, repeatedCompletion.disposition)
-        assertEquals(ready.note, repeatedCompletion.note)
+        assertEquals(TransitionDisposition.INVALID, staleSuccess.disposition)
+        assertEquals(TransitionDisposition.INVALID, staleFailure.disposition)
+        assertEquals(secondAttempt.note, staleSuccess.note)
+        assertEquals(secondAttempt.note, staleFailure.note)
+        assertEquals(NoteStatus.DELIVERED, delivered.note.status)
     }
 
     @Test

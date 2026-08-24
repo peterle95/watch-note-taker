@@ -20,14 +20,17 @@ data class ReviewableNote(
     val id: String,
     val transcript: String,
     val status: NoteStatus,
+    val nextDeliveryAttempt: Long = 1,
+    val activeDeliveryAttempt: Long? = null,
 )
 
 sealed interface NoteCommand {
     data object MarkReadyForReview : NoteCommand
     data object Approve : NoteCommand
     data object Reject : NoteCommand
-    data object MarkDelivered : NoteCommand
-    data object MarkDeliveryFailed : NoteCommand
+    data object BeginDelivery : NoteCommand
+    data class MarkDelivered(val attempt: Long) : NoteCommand
+    data class MarkDeliveryFailed(val attempt: Long) : NoteCommand
     data object RetryDelivery : NoteCommand
 }
 
@@ -45,10 +48,10 @@ data class Transition(
 /**
  * Applies idempotent review and delivery commands to a note.
  *
- * Approval and rejection are only valid from [NoteStatus.READY_FOR_REVIEW].
- * Delivery commands only act on approved notes, while a failed delivery can be
- * retried by returning to [NoteStatus.APPROVED]. Terminal states never permit a
- * contradictory review decision.
+ * Approval and rejection are only valid from [NoteStatus.READY_FOR_REVIEW]. A
+ * delivery worker starts an attempt before it can report an outcome; only the
+ * active attempt's outcome is accepted. Retried delivery receives a new attempt
+ * number, so delayed callbacks from prior attempts cannot overwrite its state.
  */
 object NoteStateMachine {
     fun execute(note: ReviewableNote, command: NoteCommand): Transition = when (command) {
@@ -70,23 +73,37 @@ object NoteStateMachine {
             alreadyApplied = setOf(NoteStatus.REJECTED),
         )
 
-        NoteCommand.MarkDelivered -> note.transition(
-            expected = NoteStatus.APPROVED,
-            target = NoteStatus.DELIVERED,
-            alreadyApplied = setOf(NoteStatus.DELIVERED),
-        )
-
-        NoteCommand.MarkDeliveryFailed -> note.transition(
-            expected = NoteStatus.APPROVED,
-            target = NoteStatus.DELIVERY_FAILED,
-            alreadyApplied = setOf(NoteStatus.DELIVERY_FAILED),
-        )
+        NoteCommand.BeginDelivery -> note.beginDelivery()
+        is NoteCommand.MarkDelivered -> note.completeDelivery(command.attempt, NoteStatus.DELIVERED)
+        is NoteCommand.MarkDeliveryFailed -> note.completeDelivery(command.attempt, NoteStatus.DELIVERY_FAILED)
 
         NoteCommand.RetryDelivery -> note.transition(
             expected = NoteStatus.DELIVERY_FAILED,
             target = NoteStatus.APPROVED,
             alreadyApplied = emptySet(),
         )
+    }
+
+    private fun ReviewableNote.beginDelivery(): Transition = when {
+        status != NoteStatus.APPROVED -> Transition(this, TransitionDisposition.INVALID)
+        activeDeliveryAttempt != null -> Transition(this, TransitionDisposition.ALREADY_APPLIED)
+        else -> Transition(
+            copy(
+                nextDeliveryAttempt = nextDeliveryAttempt + 1,
+                activeDeliveryAttempt = nextDeliveryAttempt,
+            ),
+            TransitionDisposition.APPLIED,
+        )
+    }
+
+    private fun ReviewableNote.completeDelivery(attempt: Long, target: NoteStatus): Transition = when {
+        status == NoteStatus.APPROVED && activeDeliveryAttempt == attempt -> Transition(
+            copy(status = target, activeDeliveryAttempt = null),
+            TransitionDisposition.APPLIED,
+        )
+
+        status == target -> Transition(this, TransitionDisposition.ALREADY_APPLIED)
+        else -> Transition(this, TransitionDisposition.INVALID)
     }
 
     private fun ReviewableNote.transition(
