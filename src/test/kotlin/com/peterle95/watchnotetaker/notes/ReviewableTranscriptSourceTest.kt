@@ -1,5 +1,6 @@
 package com.peterle95.watchnotetaker.notes
 
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -104,6 +105,7 @@ class ReviewableTranscriptSourceTest {
         id = id,
         transcript = "Transcript $id",
         status = status,
+        createdAt = Instant.parse("2026-08-24T15:00:00Z"),
     )
 
     private class FakeFoldReviewableNoteSource(

@@ -1,5 +1,6 @@
 package com.peterle95.watchnotetaker.notes
 
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -109,5 +110,6 @@ class NoteStateMachineTest {
         id = "note-123",
         transcript = "Remember to buy coffee beans.",
         status = status,
+        createdAt = Instant.parse("2026-08-24T15:00:00Z"),
     )
 }

@@ -1,5 +1,7 @@
 package com.peterle95.watchnotetaker.notes
 
+import java.time.Instant
+
 /**
  * The Fold-authoritative lifecycle of a transcribed note.
  *
@@ -20,6 +22,7 @@ data class ReviewableNote(
     val id: String,
     val transcript: String,
     val status: NoteStatus,
+    val createdAt: Instant,
     val nextDeliveryAttempt: Long = 1,
     val activeDeliveryAttempt: Long? = null,
 )
