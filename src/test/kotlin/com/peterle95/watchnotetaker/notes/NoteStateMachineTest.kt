@@ -57,7 +57,21 @@ class NoteStateMachineTest {
     }
 
     @Test
-    fun `commands cannot move a transcribing note into review or delivery`() {
+    fun `completed transcription enters the review queue exactly once`() {
+        val transcribingNote = note(status = NoteStatus.TRANSCRIBING)
+
+        val ready = NoteStateMachine.execute(transcribingNote, NoteCommand.MarkReadyForReview)
+        val repeatedCompletion = NoteStateMachine.execute(ready.note, NoteCommand.MarkReadyForReview)
+
+        assertEquals(TransitionDisposition.APPLIED, ready.disposition)
+        assertEquals(NoteStatus.READY_FOR_REVIEW, ready.note.status)
+        assertEquals(transcribingNote.transcript, ready.note.transcript)
+        assertEquals(TransitionDisposition.ALREADY_APPLIED, repeatedCompletion.disposition)
+        assertEquals(ready.note, repeatedCompletion.note)
+    }
+
+    @Test
+    fun `review commands cannot move a transcribing note into a decision state`() {
         val transcribingNote = note(status = NoteStatus.TRANSCRIBING)
 
         val approval = NoteStateMachine.execute(transcribingNote, NoteCommand.Approve)

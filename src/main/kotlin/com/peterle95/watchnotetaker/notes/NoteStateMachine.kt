@@ -23,6 +23,7 @@ data class ReviewableNote(
 )
 
 sealed interface NoteCommand {
+    data object MarkReadyForReview : NoteCommand
     data object Approve : NoteCommand
     data object Reject : NoteCommand
     data object MarkDelivered : NoteCommand
@@ -51,6 +52,12 @@ data class Transition(
  */
 object NoteStateMachine {
     fun execute(note: ReviewableNote, command: NoteCommand): Transition = when (command) {
+        NoteCommand.MarkReadyForReview -> note.transition(
+            expected = NoteStatus.TRANSCRIBING,
+            target = NoteStatus.READY_FOR_REVIEW,
+            alreadyApplied = setOf(NoteStatus.READY_FOR_REVIEW),
+        )
+
         NoteCommand.Approve -> note.transition(
             expected = NoteStatus.READY_FOR_REVIEW,
             target = NoteStatus.APPROVED,
