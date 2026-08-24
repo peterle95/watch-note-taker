@@ -46,6 +46,11 @@ sealed interface ReviewDecisionDelivery {
     data class Delivered(val authoritativeStatus: AuthoritativeReviewStatus) : ReviewDecisionDelivery
 }
 
+data class ReviewDecisionSynchronization(
+    val decision: PendingReviewDecision,
+    val delivery: ReviewDecisionDelivery,
+)
+
 fun interface ReviewDecisionTransport {
     fun send(decision: PendingReviewDecision): ReviewDecisionDelivery
 }
@@ -54,6 +59,14 @@ enum class ReviewDecisionQueueResult {
     Queued,
     AlreadyQueued,
     AlreadyApplied,
+}
+
+/**
+ * Whether a Fold-authoritative note status confirms a watch review decision.
+ */
+internal fun NoteStatus.matches(decision: ReviewDecision): Boolean = when (decision) {
+    ReviewDecision.Approve -> this == NoteStatus.APPROVED || this == NoteStatus.DELIVERED
+    ReviewDecision.Reject -> this == NoteStatus.REJECTED
 }
 
 /**
@@ -92,17 +105,14 @@ class ReviewDecisionOutbox(
     fun authoritativeStatus(noteId: String): AuthoritativeReviewStatus? =
         store.read().authoritativeStatuses[noteId]
 
-    fun synchronize() {
-        store.read().pendingDecisions.forEach { pendingDecision ->
-            when (val delivery = transport.send(pendingDecision)) {
-                ReviewDecisionDelivery.Disconnected,
-                ReviewDecisionDelivery.RetryableFailure,
-                -> Unit
-
-                is ReviewDecisionDelivery.Delivered -> recordAuthoritativeStatus(pendingDecision, delivery.authoritativeStatus)
+    fun synchronize(): List<ReviewDecisionSynchronization> =
+        store.read().pendingDecisions.map { pendingDecision ->
+            val delivery = transport.send(pendingDecision)
+            if (delivery is ReviewDecisionDelivery.Delivered) {
+                recordAuthoritativeStatus(pendingDecision, delivery.authoritativeStatus)
             }
+            ReviewDecisionSynchronization(pendingDecision, delivery)
         }
-    }
 
     private fun enqueue(pendingDecision: PendingReviewDecision): ReviewDecisionQueueResult {
         val snapshot = store.read()
