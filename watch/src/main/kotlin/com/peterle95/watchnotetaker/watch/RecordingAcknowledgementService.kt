@@ -11,6 +11,7 @@ class RecordingAcknowledgementService : WearableListenerService() {
         val acknowledgement = WearDataProtocol.decodeAcknowledgement(messageEvent.data) ?: return
         if (WatchAudioQueue(this).acknowledge(acknowledgement.noteId, messageEvent.sourceNodeId)) {
             TransferStatus.update(TransferState.Delivered)
+            WatchTransferWork.notifyQueueChanged(this)
         }
     }
 

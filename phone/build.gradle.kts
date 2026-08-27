@@ -1,10 +1,12 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     kotlin("android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val backendUrl = providers.gradleProperty("BACKEND_URL").orElse("").get()
+val backendUrl = providers.gradleProperty("BACKEND_URL").orElse("").get().trim()
 fun secret(name: String) = providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orNull
 val releaseStoreFile = secret("RELEASE_STORE_FILE")
 val releaseStorePassword = secret("RELEASE_STORE_PASSWORD")
@@ -12,8 +14,14 @@ val releaseKeyAlias = secret("RELEASE_KEY_ALIAS")
 val releaseKeyPassword = secret("RELEASE_KEY_PASSWORD")
 val releaseSecrets = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
 check(releaseSecrets.count { it != null } in setOf(0, 4)) { "Configure all RELEASE_* signing values or none" }
-if (gradle.startParameter.taskNames.any { it.endsWith("assembleRelease") || it.endsWith("bundleRelease") }) {
-    check(releaseSecrets.all { it != null }) { "Release packaging requires RELEASE_* signing values" }
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.project == project && it.name in setOf("packageRelease", "assembleRelease", "bundleRelease") }) {
+        val releaseBackend = runCatching { URI(backendUrl) }.getOrNull()
+        check(releaseBackend?.scheme.equals("https", ignoreCase = true) && !releaseBackend?.host.isNullOrBlank()) {
+            "Release packaging requires a nonblank HTTPS BACKEND_URL"
+        }
+        check(releaseSecrets.all { it != null }) { "Release packaging requires RELEASE_* signing values" }
+    }
 }
 
 android {

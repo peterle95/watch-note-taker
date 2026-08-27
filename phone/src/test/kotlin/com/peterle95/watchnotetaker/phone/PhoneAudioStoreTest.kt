@@ -162,9 +162,17 @@ class PhoneAudioStoreTest {
         assertEquals(TransitionDisposition.APPLIED, firstAttempt.disposition)
         assertEquals(1, firstAttempt.note.activeDeliveryAttempt)
         assertEquals(2, firstAttempt.note.nextDeliveryAttempt)
-        assertEquals(TransitionDisposition.APPLIED, store().markDeliveryFailed(noteId, 1).disposition)
-        assertEquals(TransitionDisposition.ALREADY_APPLIED, store().markDeliveryFailed(noteId, 1).disposition)
+        assertEquals(
+            TransitionDisposition.APPLIED,
+            store().markDeliveryFailed(noteId, 1, DeliveryFailureClassification.CONFLICT).disposition,
+        )
+        assertEquals(DeliveryFailureClassification.CONFLICT, store().recordings().single().deliveryFailureClassification)
+        assertEquals(
+            TransitionDisposition.ALREADY_APPLIED,
+            store().markDeliveryFailed(noteId, 1, DeliveryFailureClassification.CONFLICT).disposition,
+        )
         assertEquals(TransitionDisposition.APPLIED, store().retryDelivery(noteId).disposition)
+        assertNull(store().recordings().single().deliveryFailureClassification)
 
         val secondAttempt = store().beginDelivery(noteId)
         assertEquals(2, secondAttempt.note.activeDeliveryAttempt)
@@ -184,7 +192,10 @@ class PhoneAudioStoreTest {
         assertEquals(TransitionDisposition.INVALID, store().beginDelivery(noteId).disposition)
         assertEquals(TransitionDisposition.INVALID, store().retryDelivery(noteId).disposition)
         assertEquals(TransitionDisposition.INVALID, store().markDelivered(noteId, 1).disposition)
-        assertEquals(TransitionDisposition.INVALID, store().markDeliveryFailed(noteId, 1).disposition)
+        assertEquals(
+            TransitionDisposition.INVALID,
+            store().markDeliveryFailed(noteId, 1, DeliveryFailureClassification.TRANSIENT).disposition,
+        )
         assertEquals(ready, store().recordings().single().toReviewableNote())
     }
 
@@ -206,12 +217,15 @@ class PhoneAudioStoreTest {
         ready()
         store().approve(noteId)
         store().beginDelivery(noteId)
-        store().markDeliveryFailed(noteId, 1)
+        store().markDeliveryFailed(noteId, 1, DeliveryFailureClassification.TRANSIENT)
         store().retryDelivery(noteId)
         val secondAttempt = store().beginDelivery(noteId).note
 
         assertEquals(TransitionDisposition.INVALID, store().markDelivered(noteId, 1).disposition)
-        assertEquals(TransitionDisposition.INVALID, store().markDeliveryFailed(noteId, 1).disposition)
+        assertEquals(
+            TransitionDisposition.INVALID,
+            store().markDeliveryFailed(noteId, 1, DeliveryFailureClassification.TRANSIENT).disposition,
+        )
         assertEquals(secondAttempt, store().recordings().single().toReviewableNote())
     }
 

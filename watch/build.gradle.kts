@@ -11,8 +11,10 @@ val releaseKeyAlias = secret("RELEASE_KEY_ALIAS")
 val releaseKeyPassword = secret("RELEASE_KEY_PASSWORD")
 val releaseSecrets = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
 check(releaseSecrets.count { it != null } in setOf(0, 4)) { "Configure all RELEASE_* signing values or none" }
-if (gradle.startParameter.taskNames.any { it.endsWith("assembleRelease") || it.endsWith("bundleRelease") }) {
-    check(releaseSecrets.all { it != null }) { "Release packaging requires RELEASE_* signing values" }
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.project == project && it.name in setOf("packageRelease", "assembleRelease", "bundleRelease") }) {
+        check(releaseSecrets.all { it != null }) { "Release packaging requires RELEASE_* signing values" }
+    }
 }
 
 android {

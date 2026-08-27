@@ -45,6 +45,7 @@ class PhoneDeliveryRepositoryTest {
 
         assertEquals(DeliveryRun.RETRY, repository.runPending())
         assertEquals(NoteStatus.DELIVERY_FAILED, recording(id).status)
+        assertEquals(DeliveryFailureClassification.TRANSIENT, recording(id).deliveryFailureClassification)
         assertNull(recording(id).activeDeliveryAttempt)
 
         available = true
@@ -52,6 +53,20 @@ class PhoneDeliveryRepositoryTest {
         assertEquals(listOf<Long?>(1, 2), attempts)
         assertEquals(NoteStatus.DELIVERED, recording(id).status)
         assertEquals(3, recording(id).nextDeliveryAttempt)
+    }
+
+    @Test
+    fun `legacy unclassified delivery failure remains automatically retryable`() {
+        val id = addReady("123e4567-e89b-12d3-a456-426614174000")
+        store.approve(id)
+        PhoneDeliveryRepository(store, MarkdownDeliveryTransport { error("unavailable") }).runPending()
+        metadata.update(id) { it.copy(deliveryFailureClassification = null) }
+
+        assertEquals(
+            DeliveryRun.COMPLETED,
+            PhoneDeliveryRepository(store, MarkdownDeliveryTransport {}).runPending(),
+        )
+        assertEquals(NoteStatus.DELIVERED, recording(id).status)
     }
 
     @Test
@@ -98,7 +113,33 @@ class PhoneDeliveryRepositoryTest {
 
         assertEquals(DeliveryRun.CONFLICT, repository.runPending())
         assertEquals(NoteStatus.DELIVERY_FAILED, recording(id).status)
+        assertEquals(DeliveryFailureClassification.CONFLICT, recording(id).deliveryFailureClassification)
         assertEquals(1, writes)
+
+        assertEquals(DeliveryRun.IDLE, repository.runPending())
+        assertEquals(1, writes)
+
+        store.retryDelivery(id)
+        assertNull(recording(id).deliveryFailureClassification)
+        assertEquals(DeliveryRun.CONFLICT, repository.runPending())
+        assertEquals(2, writes)
+    }
+
+    @Test
+    fun `transient failure takes retry precedence over a conflict in the same batch`() {
+        val conflict = addReady("123e4567-e89b-12d3-a456-426614174000")
+        val transient = addReady("123e4567-e89b-12d3-a456-426614174001")
+        store.approve(conflict)
+        store.approve(transient)
+
+        val result = PhoneDeliveryRepository(store, MarkdownDeliveryTransport { note ->
+            if (note.id == conflict) throw MarkdownConflictException("different content")
+            error("provider unavailable")
+        }).runPending()
+
+        assertEquals(DeliveryRun.RETRY, result)
+        assertEquals(DeliveryFailureClassification.CONFLICT, recording(conflict).deliveryFailureClassification)
+        assertEquals(DeliveryFailureClassification.TRANSIENT, recording(transient).deliveryFailureClassification)
     }
 
     @Test
@@ -140,4 +181,8 @@ private class DeliveryMetadataStore : RecordingMetadataStore {
     }
 
     override fun remove(noteId: String): Boolean = values.remove(noteId) != null
+
+    fun update(noteId: String, transform: (RecordingMetadata) -> RecordingMetadata) {
+        values[noteId] = transform(checkNotNull(values[noteId]))
+    }
 }

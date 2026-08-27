@@ -21,8 +21,13 @@ class WatchTransferWorker(
     }
 }
 
+class WatchQueueRefreshWorker(context: Context, parameters: WorkerParameters) : Worker(context, parameters) {
+    override fun doWork(): Result = Result.success()
+}
+
 object WatchTransferWork {
     const val UNIQUE_NAME = "watch-recording-transfer"
+    const val REFRESH_NAME = "watch-queue-refresh"
 
     fun enqueue(context: Context, replace: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<WatchTransferWorker>()
@@ -32,6 +37,14 @@ object WatchTransferWork {
             UNIQUE_NAME,
             if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.APPEND_OR_REPLACE,
             request,
+        )
+    }
+
+    fun notifyQueueChanged(context: Context) {
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            REFRESH_NAME,
+            ExistingWorkPolicy.REPLACE,
+            OneTimeWorkRequestBuilder<WatchQueueRefreshWorker>().build(),
         )
     }
 }

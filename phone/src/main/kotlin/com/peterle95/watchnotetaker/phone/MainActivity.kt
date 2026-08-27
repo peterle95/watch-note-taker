@@ -91,6 +91,9 @@ class MainActivity : ComponentActivity() {
                 }
                 if (recordings.any { it.status == NoteStatus.APPROVED || it.status == NoteStatus.DELIVERY_FAILED }) {
                     Button(onClick = {
+                        recordings.filter { it.status == NoteStatus.DELIVERY_FAILED }
+                            .forEach { store.retryDelivery(it.noteId) }
+                        recordings = store.recordings()
                         DeliveryWork.enqueue(this@MainActivity, replace = true)
                         message = "Markdown delivery retry requested."
                     }) { Text("Retry Markdown delivery") }
@@ -124,7 +127,13 @@ class MainActivity : ComponentActivity() {
                             NoteStatus.APPROVED -> Text("Approved for Markdown delivery")
                             NoteStatus.REJECTED -> Text("Rejected")
                             NoteStatus.DELIVERED -> Text("Delivered")
-                            NoteStatus.DELIVERY_FAILED -> Text("Markdown delivery failed")
+                            NoteStatus.DELIVERY_FAILED -> Text(
+                                if (recording.deliveryFailureClassification == DeliveryFailureClassification.CONFLICT) {
+                                    "Markdown delivery conflict; resolve the existing note, then retry"
+                                } else {
+                                    "Markdown delivery failed; retrying automatically"
+                                },
+                            )
                             NoteStatus.TRANSCRIBING -> Text("Transcribing")
                         }
                     }

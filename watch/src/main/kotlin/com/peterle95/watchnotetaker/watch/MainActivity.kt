@@ -43,6 +43,10 @@ class MainActivity : ComponentActivity() {
                 TransferState.Failed -> "Transfer failed. Recordings stay queued."
             }
         }
+        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(WatchTransferWork.REFRESH_NAME).observe(this) {
+            queuedRecordings = audioQueue.entries().size
+            if (TransferStatus.state == TransferState.Delivered) status = "Phone received recording"
+        }
         recordingController = RecordingController(
             context = this,
             onFinished = { recordingFile, duration ->
@@ -59,8 +63,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     .onFailure {
-                        recordingFile.delete()
-                        status = "Could not save recording. Try again."
+                        status = "Could not queue recording. Audio remains on watch."
                     }
             },
             onFailure = { message ->

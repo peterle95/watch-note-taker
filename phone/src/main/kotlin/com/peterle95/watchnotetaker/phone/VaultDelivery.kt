@@ -25,6 +25,7 @@ class VaultDelivery(
     private val preferences = context.getSharedPreferences("vault", Context.MODE_PRIVATE)
 
     fun select(uri: Uri) {
+        releasePendingPermission()
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         val previous = preferences.getString(URI_KEY, null)?.let(Uri::parse)
         val alreadyGranted = hasReadWriteGrant(uri)
@@ -32,9 +33,6 @@ class VaultDelivery(
         try {
             check(hasReadWriteGrant(uri)) { "Vault folder permission was not persisted" }
             check(folder(uri)?.isUsable() == true) { "Vault folder is not readable and writable" }
-            if (previous != null && previous != uri) {
-                context.contentResolver.releasePersistableUriPermission(previous, flags)
-            }
             check(
                 preferences.edit()
                     .putString(URI_KEY, uri.toString())
@@ -45,9 +43,17 @@ class VaultDelivery(
             if (!alreadyGranted) runCatching { context.contentResolver.releasePersistableUriPermission(uri, flags) }
             throw failure
         }
+        if (previous != null && previous != uri) {
+            runCatching { context.contentResolver.releasePersistableUriPermission(previous, flags) }
+                .onFailure {
+                    val pending = preferences.getStringSet(PENDING_RELEASE_KEY, emptySet()).orEmpty() + previous.toString()
+                    preferences.edit().putStringSet(PENDING_RELEASE_KEY, pending).commit()
+                }
+        }
     }
 
     fun folderState(): VaultFolderState {
+        releasePendingPermission()
         val uri = preferences.getString(URI_KEY, null)?.let(Uri::parse)
             ?: return if (preferences.getBoolean(REVOKED_KEY, false)) {
                 VaultFolderState.PERMISSION_REVOKED
@@ -65,6 +71,7 @@ class VaultDelivery(
     }
 
     fun clear() {
+        releasePendingPermission()
         val uri = preferences.getString(URI_KEY, null)?.let(Uri::parse)
         uri?.let {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -73,6 +80,16 @@ class VaultDelivery(
         check(preferences.edit().remove(URI_KEY).putBoolean(REVOKED_KEY, false).commit()) {
             "Could not clear vault folder"
         }
+    }
+
+    private fun releasePendingPermission() {
+        val pending = preferences.getStringSet(PENDING_RELEASE_KEY, emptySet()).orEmpty()
+        if (pending.isEmpty()) return
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val remaining = pending.filterTo(mutableSetOf()) { value ->
+            runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(value), flags) }.isFailure
+        }
+        preferences.edit().putStringSet(PENDING_RELEASE_KEY, remaining).commit()
     }
 
     override fun write(note: ReviewableNote) {
@@ -150,5 +167,6 @@ class VaultDelivery(
     companion object {
         private const val URI_KEY = "uri"
         private const val REVOKED_KEY = "permission-revoked"
+        private const val PENDING_RELEASE_KEY = "pending-release-uri"
     }
 }

@@ -13,6 +13,11 @@ import java.io.File
 import java.io.InputStream
 import java.time.Instant
 
+enum class DeliveryFailureClassification {
+    TRANSIENT,
+    CONFLICT,
+}
+
 data class ReceivedRecording(
     val noteId: String,
     val durationSeconds: Int,
@@ -23,6 +28,7 @@ data class ReceivedRecording(
     val transcriptionAttemptCount: Int,
     val lastTranscriptionError: String?,
     val nextTranscriptionRetryAtMillis: Long?,
+    val deliveryFailureClassification: DeliveryFailureClassification? = null,
     val nextDeliveryAttempt: Long = 1,
     val activeDeliveryAttempt: Long? = null,
 )
@@ -44,6 +50,7 @@ data class RecordingMetadata(
     val transcriptionAttemptCount: Int = 0,
     val lastTranscriptionError: String? = null,
     val nextTranscriptionRetryAtMillis: Long? = null,
+    val deliveryFailureClassification: DeliveryFailureClassification? = null,
     val nextDeliveryAttempt: Long = 1,
     val activeDeliveryAttempt: Long? = null,
 )
@@ -122,6 +129,7 @@ class PhoneAudioStore(
                     transcriptionAttemptCount = metadata.transcriptionAttemptCount,
                     lastTranscriptionError = metadata.lastTranscriptionError,
                     nextTranscriptionRetryAtMillis = metadata.nextTranscriptionRetryAtMillis,
+                    deliveryFailureClassification = metadata.deliveryFailureClassification,
                     nextDeliveryAttempt = metadata.nextDeliveryAttempt,
                     activeDeliveryAttempt = metadata.activeDeliveryAttempt,
                 )
@@ -213,14 +221,23 @@ class PhoneAudioStore(
 
     @Synchronized
     fun markDelivered(noteId: String, attempt: Long): Transition =
-        transition(noteId, NoteCommand.MarkDelivered(attempt))
+        transition(noteId, metadata(noteId), NoteCommand.MarkDelivered(attempt), deliveryFailureClassification = null)
 
     @Synchronized
-    fun markDeliveryFailed(noteId: String, attempt: Long): Transition =
-        transition(noteId, NoteCommand.MarkDeliveryFailed(attempt))
+    fun markDeliveryFailed(
+        noteId: String,
+        attempt: Long,
+        classification: DeliveryFailureClassification,
+    ): Transition = transition(
+        noteId,
+        metadata(noteId),
+        NoteCommand.MarkDeliveryFailed(attempt),
+        deliveryFailureClassification = classification,
+    )
 
     @Synchronized
-    fun retryDelivery(noteId: String): Transition = transition(noteId, NoteCommand.RetryDelivery)
+    fun retryDelivery(noteId: String): Transition =
+        transition(noteId, metadata(noteId), NoteCommand.RetryDelivery, deliveryFailureClassification = null)
 
     private fun transition(noteId: String, command: NoteCommand): Transition {
         require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
@@ -232,6 +249,7 @@ class PhoneAudioStore(
         current: RecordingMetadata,
         command: NoteCommand,
         transcript: String? = current.transcript,
+        deliveryFailureClassification: DeliveryFailureClassification? = current.deliveryFailureClassification,
     ): Transition {
         val transition = NoteStateMachine.execute(current.toReviewableNote(noteId, transcript.orEmpty()), command)
         if (transition.disposition == TransitionDisposition.APPLIED) {
@@ -242,6 +260,7 @@ class PhoneAudioStore(
                     status = transition.note.status,
                     lastTranscriptionError = if (command == NoteCommand.MarkReadyForReview) null else current.lastTranscriptionError,
                     nextTranscriptionRetryAtMillis = if (command == NoteCommand.MarkReadyForReview) null else current.nextTranscriptionRetryAtMillis,
+                    deliveryFailureClassification = deliveryFailureClassification,
                     nextDeliveryAttempt = transition.note.nextDeliveryAttempt,
                     activeDeliveryAttempt = transition.note.activeDeliveryAttempt,
                 ),
@@ -289,6 +308,8 @@ private class SharedPreferencesRecordingMetadataStore(
             transcriptionAttemptCount = preferences.getInt("transcriptionAttempts.$noteId", 0),
             lastTranscriptionError = preferences.getString("transcriptionError.$noteId", null),
             nextTranscriptionRetryAtMillis = preferences.longOrNull("transcriptionRetry.$noteId"),
+            deliveryFailureClassification = preferences.getString("deliveryFailure.$noteId", null)
+                ?.let(DeliveryFailureClassification::valueOf),
             nextDeliveryAttempt = preferences.getLong("nextDeliveryAttempt.$noteId", 1),
             activeDeliveryAttempt = preferences.longOrNull("activeDeliveryAttempt.$noteId"),
         )
@@ -302,6 +323,7 @@ private class SharedPreferencesRecordingMetadataStore(
         .putNullableString("transcript.$noteId", metadata.transcript)
         .putNullableString("transcriptionError.$noteId", metadata.lastTranscriptionError)
         .putNullableLong("transcriptionRetry.$noteId", metadata.nextTranscriptionRetryAtMillis)
+        .putNullableString("deliveryFailure.$noteId", metadata.deliveryFailureClassification?.name)
         .putLong("nextDeliveryAttempt.$noteId", metadata.nextDeliveryAttempt)
         .putNullableLong("activeDeliveryAttempt.$noteId", metadata.activeDeliveryAttempt)
         .commit()
@@ -314,6 +336,7 @@ private class SharedPreferencesRecordingMetadataStore(
         .remove("transcriptionAttempts.$noteId")
         .remove("transcriptionError.$noteId")
         .remove("transcriptionRetry.$noteId")
+        .remove("deliveryFailure.$noteId")
         .remove("nextDeliveryAttempt.$noteId")
         .remove("activeDeliveryAttempt.$noteId")
         .commit()
