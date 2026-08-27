@@ -38,11 +38,13 @@ class WatchAudioQueue(context: Context) {
         ?: emptyList()
 
     fun remove(noteId: String) {
+        if (!noteId.matches(NOTE_ID)) return
         val file = File(directory, "$noteId.m4a")
         if (file.delete()) preferences.edit().remove(file.name).apply()
     }
 
     companion object {
         const val CAPACITY = 10
+        private val NOTE_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
     }
 }

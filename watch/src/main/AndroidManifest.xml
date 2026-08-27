@@ -2,6 +2,11 @@
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <application android:theme="@style/Theme.WatchNoteTaker" android:label="Watch Note Taker">
+        <service android:name=".RecordingAcknowledgementService" android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.BIND_LISTENER" />
+            </intent-filter>
+        </service>
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

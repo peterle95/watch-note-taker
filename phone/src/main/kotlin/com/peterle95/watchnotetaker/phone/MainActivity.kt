@@ -8,6 +8,12 @@ import androidx.compose.material3.Text
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { Text("Watch Note Taker\nSelect an Obsidian vault folder to begin.") }
+        val receivedRecordings = PhoneAudioStore(this).recordings().size
+        setContent {
+            Text(
+                "Watch Note Taker\n$receivedRecordings recordings waiting for transcription.\n" +
+                    "Select an Obsidian vault folder to begin.",
+            )
+        }
     }
 }
