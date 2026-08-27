@@ -24,59 +24,38 @@ class MainActivity : ComponentActivity() {
         if (uri != null) onVaultSelection?.invoke(runCatching { vaultDelivery.select(uri) })
     }
     private var recordings by mutableStateOf(emptyList<ReceivedRecording>())
+    private var vaultState by mutableStateOf(VaultFolderState.NONE)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val store = PhoneAudioStore(this)
         val deviceTokenStore = DeviceTokenStore(this)
         vaultDelivery = VaultDelivery(this)
+        vaultState = vaultDelivery.folderState()
         recordings = store.recordings()
         TranscriptionWork.enqueue(this)
+        DeliveryWork.enqueue(this)
         WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData("phone-transcription").observe(this) {
             recordings = store.recordings()
+        }
+        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(DeliveryWork.UNIQUE_NAME).observe(this) {
+            recordings = store.recordings()
+            vaultState = vaultDelivery.folderState()
         }
         setContent {
             var recordingForTranscript by remember { mutableStateOf<ReceivedRecording?>(null) }
             var transcript by remember { mutableStateOf("") }
             var reviewDecision by remember { mutableStateOf<Pair<ReceivedRecording, Boolean>?>(null) }
             var message by remember { mutableStateOf<String?>(null) }
-            var vaultSelected by remember { mutableStateOf(vaultDelivery.isSelected()) }
             var deviceToken by remember { mutableStateOf("") }
             var deviceTokenConfigured by remember { mutableStateOf(deviceTokenStore.get().isNotBlank()) }
-            fun deliverApproved() {
-                var failed = false
-                recordings.filter { it.status == NoteStatus.APPROVED || it.status == NoteStatus.DELIVERY_FAILED }
-                    .forEach { recording ->
-                        var attempt: Long? = null
-                        runCatching {
-                            if (recording.status == NoteStatus.DELIVERY_FAILED) {
-                                check(store.retryDelivery(recording.noteId).disposition == TransitionDisposition.APPLIED) {
-                                    "Could not retry delivery"
-                                }
-                            }
-                            val started = store.beginDelivery(recording.noteId)
-                            check(started.disposition != TransitionDisposition.INVALID) { "Could not begin delivery" }
-                            attempt = checkNotNull(started.note.activeDeliveryAttempt)
-                            vaultDelivery.deliver(started.note.copy(createdAt = recording.createdAt))
-                            check(
-                                store.markDelivered(recording.noteId, checkNotNull(attempt)).disposition !=
-                                    TransitionDisposition.INVALID,
-                            ) { "Could not persist delivery" }
-                        }
-                            .onFailure {
-                                attempt?.let { runCatching { store.markDeliveryFailed(recording.noteId, it) } }
-                                failed = true
-                            }
-                    }
-                recordings = store.recordings()
-                message = if (failed) "Vault unavailable. Pick the folder again or retry delivery." else "Approved notes delivered."
-            }
             onVaultSelection = { result ->
                 result.onSuccess {
-                    vaultSelected = vaultDelivery.isSelected()
+                    vaultState = vaultDelivery.folderState()
                     message = "Vault folder connected."
-                    deliverApproved()
+                    DeliveryWork.enqueue(this@MainActivity)
                 }.onFailure {
+                    vaultState = vaultDelivery.folderState()
                     message = "Could not connect to that vault folder."
                 }
             }
@@ -85,6 +64,7 @@ class MainActivity : ComponentActivity() {
                 Text("${recordings.count { it.transcript == null }} recordings waiting for transcription")
                 Text(if (BuildConfig.BACKEND_URL.isBlank()) "Backend URL is not configured" else "Backend configured")
                 Text(if (deviceTokenConfigured) "Device token configured" else "Device token required")
+                Text("Vault: ${vaultState.label}")
                 OutlinedTextField(
                     value = deviceToken,
                     onValueChange = { deviceToken = it },
@@ -107,9 +87,14 @@ class MainActivity : ComponentActivity() {
                 }) { Text("Save device token") }
                 message?.let { Text(it) }
                 Button(onClick = { vaultFolderPicker.launch(null) }) {
-                    Text(if (vaultSelected) "Change vault folder" else "Select vault folder")
+                    Text(if (vaultState == VaultFolderState.CONNECTED) "Change vault folder" else "Choose vault folder")
                 }
-                if (vaultSelected) Button(onClick = ::deliverApproved) { Text("Retry Markdown delivery") }
+                if (recordings.any { it.status == NoteStatus.APPROVED || it.status == NoteStatus.DELIVERY_FAILED }) {
+                    Button(onClick = {
+                        DeliveryWork.enqueue(this@MainActivity, replace = true)
+                        message = "Markdown delivery retry requested."
+                    }) { Text("Retry Markdown delivery") }
+                }
                 recordings.forEach { recording ->
                     Text("${recording.noteId.take(8)} (${recording.durationSeconds}s)")
                     recording.lastTranscriptionError?.let { error ->
@@ -152,8 +137,8 @@ class MainActivity : ComponentActivity() {
                         reviewDecision = null
                         if (decision.disposition == TransitionDisposition.INVALID) {
                             message = "This note is no longer ready for review."
-                        } else if (approved && vaultSelected) {
-                            deliverApproved()
+                        } else if (approved) {
+                            DeliveryWork.enqueue(this@MainActivity)
                         }
                     }) { Text("Confirm") }
                     Button(onClick = { reviewDecision = null }) { Text("Cancel") }
@@ -180,3 +165,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+private val VaultFolderState.label: String
+    get() = when (this) {
+        VaultFolderState.CONNECTED -> "Connected"
+        VaultFolderState.PERMISSION_REVOKED -> "Permission revoked"
+        VaultFolderState.UNAVAILABLE -> "Unavailable"
+        VaultFolderState.NONE -> "None"
+    }

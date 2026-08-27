@@ -15,17 +15,19 @@ fun interface MarkdownDeliveryTransport {
     fun write(note: ReviewableNote)
 }
 
+class MarkdownConflictException(message: String) : IllegalStateException(message)
+
 class FileMarkdownDeliveryTransport(
     private val vault: Path,
 ) : MarkdownDeliveryTransport {
     override fun write(note: ReviewableNote) {
         require(note.status == NoteStatus.APPROVED) { "Only approved notes can be delivered" }
         Files.createDirectories(vault)
-        val target = vault.resolve(note.fileName())
-        val content = note.markdown()
+        val target = vault.resolve(note.markdownFileName())
+        val content = note.markdownContent()
         if (Files.exists(target)) {
-            require(Files.readString(target, UTF_8) == content) {
-                "Markdown destination already contains different content: $target"
+            if (Files.readString(target, UTF_8) != content) {
+                throw MarkdownConflictException("Markdown destination already contains different content: $target")
             }
             return
         }
@@ -50,8 +52,8 @@ class FileMarkdownDeliveryTransport(
     }
 
     private fun verifyExisting(target: Path, content: String) {
-        require(Files.readString(target, UTF_8) == content) {
-            "Markdown destination already contains different content: $target"
+        if (Files.readString(target, UTF_8) != content) {
+            throw MarkdownConflictException("Markdown destination already contains different content: $target")
         }
     }
 }
@@ -80,9 +82,9 @@ class MarkdownDeliveryWorker(
 private val markdownTimestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH-mm-ss'Z'")
     .withZone(UTC)
 
-private fun ReviewableNote.fileName(): String = "${markdownTimestamp.format(createdAt)}-$id.md"
+fun ReviewableNote.markdownFileName(): String = "${markdownTimestamp.format(createdAt)}-$id.md"
 
-private fun ReviewableNote.markdown(): String = buildString {
+fun ReviewableNote.markdownContent(): String = buildString {
     appendLine("---")
     appendLine("created: ${createdAt}")
     appendLine("source: watch-note-taker")

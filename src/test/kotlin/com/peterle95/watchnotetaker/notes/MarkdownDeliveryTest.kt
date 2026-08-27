@@ -9,6 +9,17 @@ import kotlin.test.assertTrue
 
 class MarkdownDeliveryTest {
     @Test
+    fun `filename and content helpers expose the canonical Markdown contract`() {
+        val note = ReviewableNote("stable", "hello", NoteStatus.APPROVED, Instant.parse("2024-01-02T03:04:05Z"))
+
+        assertEquals("2024-01-02T03-04-05Z-stable.md", note.markdownFileName())
+        assertEquals(
+            "---\ncreated: 2024-01-02T03:04:05Z\nsource: watch-note-taker\nstatus: approved\n---\n\nhello\n",
+            note.markdownContent(),
+        )
+    }
+
+    @Test
     fun `only approved notes write once and become delivered`() {
         val vault = Files.createTempDirectory("vault")
         val transport = FileMarkdownDeliveryTransport(vault)
