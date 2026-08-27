@@ -8,6 +8,7 @@ data class ReceivedRecording(
     val noteId: String,
     val durationSeconds: Int,
     val file: File,
+    val transcript: String?,
 )
 
 class PhoneAudioStore(context: Context) {
@@ -42,9 +43,19 @@ class PhoneAudioStore(context: Context) {
                 noteId = file.nameWithoutExtension,
                 durationSeconds = preferences.getInt(file.name, 0),
                 file = file,
+                transcript = preferences.getString("transcript.${file.nameWithoutExtension}", null),
             )
         }
         ?: emptyList()
+
+    fun saveTranscript(noteId: String, transcript: String) {
+        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        require(transcript.isNotBlank()) { "Transcript must not be blank" }
+        require(File(directory, "$noteId.m4a").isFile) { "Recording does not exist" }
+        check(preferences.edit().putString("transcript.$noteId", transcript.trim()).commit()) {
+            "Could not save transcript"
+        }
+    }
 
     companion object {
         private val NOTE_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
