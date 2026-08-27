@@ -28,6 +28,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material:material:1.7.8")
     implementation("androidx.wear.compose:compose-material:1.4.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("com.google.android.gms:play-services-wearable:19.0.0")
     testImplementation(kotlin("test"))
 }

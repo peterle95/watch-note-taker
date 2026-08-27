@@ -20,22 +20,11 @@ class WearRecordingTransfer(
     private val runner = RecordingTransferRunner(
         queuedRecordings = audioQueue::entries,
         transport = WearRecordingTransport(applicationContext, audioQueue),
-        onState = { state ->
-            if (state == TransferState.WaitingForAcknowledgement) scheduleMissingAcknowledgementRetry()
-            if (state == TransferState.Idle) retryAttempts = 0
-            mainHandler.post { onStatus(state.message) }
-        },
+        onState = { state -> mainHandler.post { onStatus(state.message) } },
     )
-    private var retryAttempts = 0
 
     fun sendQueuedRecordings() {
         runner.schedule(executor)
-    }
-
-    private fun scheduleMissingAcknowledgementRetry() {
-        if (retryAttempts >= MAX_MISSING_ACK_RETRIES) return
-        val delay = BASE_RETRY_MILLIS shl retryAttempts++
-        mainHandler.postDelayed(::sendQueuedRecordings, delay)
     }
 
     private val TransferState.message: String
@@ -51,12 +40,10 @@ class WearRecordingTransfer(
 
     private companion object {
         val executor = Executors.newSingleThreadExecutor()
-        const val BASE_RETRY_MILLIS = 30_000L
-        const val MAX_MISSING_ACK_RETRIES = 5
     }
 }
 
-private class WearRecordingTransport(
+internal class WearRecordingTransport(
     private val context: Context,
     private val audioQueue: WatchAudioQueue,
 ) : RecordingTransport {

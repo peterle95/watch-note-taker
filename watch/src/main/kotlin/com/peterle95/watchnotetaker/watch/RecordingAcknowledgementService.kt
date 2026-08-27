@@ -16,7 +16,7 @@ class RecordingAcknowledgementService : WearableListenerService() {
 
     override fun onPeerConnected(peer: Node) {
         val queue = WatchAudioQueue(this)
-        if (queue.entries().isNotEmpty()) WearRecordingTransfer(this, queue) {}.sendQueuedRecordings()
+        if (queue.entries().isNotEmpty()) WatchTransferWork.enqueue(this, replace = true)
     }
 
     override fun onPeerDisconnected(peer: Node) {

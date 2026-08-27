@@ -14,6 +14,7 @@ import androidx.compose.material.Text
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.ScalingLazyColumn
+import androidx.work.WorkManager
 
 class MainActivity : ComponentActivity() {
     private var recording by mutableStateOf(false)
@@ -21,7 +22,6 @@ class MainActivity : ComponentActivity() {
     private var queuedRecordings by mutableStateOf(0)
     private lateinit var recordingController: RecordingController
     private lateinit var audioQueue: WatchAudioQueue
-    private lateinit var recordingTransfer: WearRecordingTransfer
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startRecording() else status = "Microphone permission is required"
     }
@@ -30,8 +30,19 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         audioQueue = WatchAudioQueue(this)
         queuedRecordings = audioQueue.entries().size
-        recordingTransfer = WearRecordingTransfer(this, audioQueue) { status = it }
-        if (queuedRecordings > 0) recordingTransfer.sendQueuedRecordings()
+        if (queuedRecordings > 0) WatchTransferWork.enqueue(this)
+        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(WatchTransferWork.UNIQUE_NAME).observe(this) {
+            queuedRecordings = audioQueue.entries().size
+            status = when (TransferStatus.state) {
+                TransferState.Idle -> "Ready to record"
+                TransferState.Connecting -> "Connecting to phone..."
+                TransferState.Sending -> "Sending recordings..."
+                TransferState.WaitingForAcknowledgement -> "Waiting for phone confirmation"
+                TransferState.Delivered -> "Phone received recording"
+                TransferState.Disconnected -> "Phone disconnected. Recordings stay queued."
+                TransferState.Failed -> "Transfer failed. Recordings stay queued."
+            }
+        }
         recordingController = RecordingController(
             context = this,
             onFinished = { recordingFile, duration ->
@@ -41,6 +52,7 @@ class MainActivity : ComponentActivity() {
                         if (queued) {
                             queuedRecordings = audioQueue.entries().size
                             status = "Queued ${duration}s recording"
+                            WatchTransferWork.enqueue(this@MainActivity)
                         } else {
                             recordingFile.delete()
                             status = "Queue full. Send recordings first."
@@ -105,8 +117,8 @@ class MainActivity : ComponentActivity() {
         if (queuedRecordings == 0) {
             status = "No recordings queued"
         } else {
-            status = "Sending recordings..."
-            recordingTransfer.sendQueuedRecordings()
+            status = "Sending recordings in background..."
+            WatchTransferWork.enqueue(this, replace = true)
         }
     }
 }
