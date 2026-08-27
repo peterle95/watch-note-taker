@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
     private var queuedRecordings by mutableStateOf(0)
     private lateinit var recordingController: RecordingController
     private lateinit var audioQueue: WatchAudioQueue
+    private lateinit var recordingTransfer: WearRecordingTransfer
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startRecording() else status = "Microphone permission is required"
     }
@@ -29,6 +30,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         audioQueue = WatchAudioQueue(this)
         queuedRecordings = audioQueue.entries().size
+        recordingTransfer = WearRecordingTransfer(this, audioQueue) { status = it }
         recordingController = RecordingController(
             context = this,
             onFinished = { recordingFile, duration ->
@@ -64,6 +66,9 @@ class MainActivity : ComponentActivity() {
                     }
                     item { Text(status) }
                     item { Text("$queuedRecordings recordings queued") }
+                    item {
+                        Button(onClick = ::sendQueuedRecordings) { Text("Send queued") }
+                    }
                 }
             }
         }
@@ -93,5 +98,14 @@ class MainActivity : ComponentActivity() {
                 status = "Recording (stops after 120s)"
             }
             .onFailure { status = "Recording failed. Try again." }
+    }
+
+    private fun sendQueuedRecordings() {
+        if (queuedRecordings == 0) {
+            status = "No recordings queued"
+        } else {
+            status = "Sending recordings..."
+            recordingTransfer.sendQueuedRecordings()
+        }
     }
 }
