@@ -14,6 +14,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.peterle95.watchnotetaker.notes.NoteStatus
+import com.peterle95.watchnotetaker.notes.TransitionDisposition
 
 class MainActivity : ComponentActivity() {
     private lateinit var vaultDelivery: VaultDelivery
@@ -43,12 +45,26 @@ class MainActivity : ComponentActivity() {
             var deviceTokenConfigured by remember { mutableStateOf(deviceTokenStore.get().isNotBlank()) }
             fun deliverApproved() {
                 var failed = false
-                recordings.filter { it.status == PhoneNoteStatus.APPROVED || it.status == PhoneNoteStatus.DELIVERY_FAILED }
+                recordings.filter { it.status == NoteStatus.APPROVED || it.status == NoteStatus.DELIVERY_FAILED }
                     .forEach { recording ->
-                        runCatching { vaultDelivery.deliver(recording) }
-                            .onSuccess { store.markDelivery(recording.noteId, delivered = true) }
+                        var attempt: Long? = null
+                        runCatching {
+                            if (recording.status == NoteStatus.DELIVERY_FAILED) {
+                                check(store.retryDelivery(recording.noteId).disposition == TransitionDisposition.APPLIED) {
+                                    "Could not retry delivery"
+                                }
+                            }
+                            val started = store.beginDelivery(recording.noteId)
+                            check(started.disposition != TransitionDisposition.INVALID) { "Could not begin delivery" }
+                            attempt = checkNotNull(started.note.activeDeliveryAttempt)
+                            vaultDelivery.deliver(started.note.copy(createdAt = recording.createdAt))
+                            check(
+                                store.markDelivered(recording.noteId, checkNotNull(attempt)).disposition !=
+                                    TransitionDisposition.INVALID,
+                            ) { "Could not persist delivery" }
+                        }
                             .onFailure {
-                                store.markDelivery(recording.noteId, delivered = false)
+                                attempt?.let { runCatching { store.markDeliveryFailed(recording.noteId, it) } }
                                 failed = true
                             }
                     }
@@ -112,7 +128,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         Text(recording.transcript.orEmpty())
                         when (recording.status) {
-                            PhoneNoteStatus.READY_FOR_REVIEW -> {
+                            NoteStatus.READY_FOR_REVIEW -> {
                                 Button(onClick = {
                                     reviewDecision = recording to true
                                 }) { Text("Approve") }
@@ -120,21 +136,25 @@ class MainActivity : ComponentActivity() {
                                     reviewDecision = recording to false
                                 }) { Text("Reject") }
                             }
-                            PhoneNoteStatus.APPROVED -> Text("Approved for Markdown delivery")
-                            PhoneNoteStatus.REJECTED -> Text("Rejected")
-                            PhoneNoteStatus.DELIVERED -> Text("Delivered")
-                            PhoneNoteStatus.DELIVERY_FAILED -> Text("Markdown delivery failed")
-                            PhoneNoteStatus.TRANSCRIBING -> Text("Transcribing")
+                            NoteStatus.APPROVED -> Text("Approved for Markdown delivery")
+                            NoteStatus.REJECTED -> Text("Rejected")
+                            NoteStatus.DELIVERED -> Text("Delivered")
+                            NoteStatus.DELIVERY_FAILED -> Text("Markdown delivery failed")
+                            NoteStatus.TRANSCRIBING -> Text("Transcribing")
                         }
                     }
                 }
                 reviewDecision?.let { (recording, approved) ->
                     Text("${if (approved) "Approve" else "Reject"} this transcript?")
                     Button(onClick = {
-                        store.decide(recording.noteId, approved)
+                        val decision = if (approved) store.approve(recording.noteId) else store.reject(recording.noteId)
                         recordings = store.recordings()
                         reviewDecision = null
-                        if (approved && vaultSelected) deliverApproved()
+                        if (decision.disposition == TransitionDisposition.INVALID) {
+                            message = "This note is no longer ready for review."
+                        } else if (approved && vaultSelected) {
+                            deliverApproved()
+                        }
                     }) { Text("Confirm") }
                     Button(onClick = { reviewDecision = null }) { Text("Cancel") }
                 }

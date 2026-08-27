@@ -1,8 +1,10 @@
 package com.peterle95.watchnotetaker.phone
 
 import com.peterle95.watchnotetaker.notes.NoteStatus
+import com.peterle95.watchnotetaker.notes.TransitionDisposition
 import java.io.ByteArrayInputStream
 import java.nio.file.Files
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -102,6 +104,132 @@ class PhoneAudioStoreTest {
     }
 
     @Test
+    fun `marking ready reports idempotent and invalid completions without changing state`() {
+        store().receive(noteId, 12, audio("first"))
+
+        val ready = store().markReadyForReview(noteId, "Transcript")
+        val repeated = store().markReadyForReview(noteId, "Transcript")
+        store().approve(noteId)
+        val late = store().markReadyForReview(noteId, "Transcript")
+
+        assertEquals(TransitionDisposition.APPLIED, ready.disposition)
+        assertEquals(TransitionDisposition.ALREADY_APPLIED, repeated.disposition)
+        assertEquals(TransitionDisposition.INVALID, late.disposition)
+        assertEquals(NoteStatus.APPROVED, store().recordings().single().status)
+    }
+
+    @Test
+    fun `legacy metadata uses the audio timestamp in persisted transitions`() {
+        store().receive(noteId, 12, audio("first"))
+        val timestamp = 1_700_000_000_000
+        store().recordings().single().file.setLastModified(timestamp)
+        metadata.save(noteId, metadata.load(noteId)!!.copy(createdAtMillis = 0))
+
+        val ready = store().markReadyForReview(noteId, "Transcript")
+
+        assertEquals(Instant.ofEpochMilli(timestamp), ready.note.createdAt)
+    }
+
+    @Test
+    fun `ready notes can be approved or rejected and other notes cannot be reviewed`() {
+        ready()
+
+        assertEquals(TransitionDisposition.APPLIED, store().approve(noteId).disposition)
+        assertEquals(TransitionDisposition.ALREADY_APPLIED, store().approve(noteId).disposition)
+        assertEquals(TransitionDisposition.INVALID, store().reject(noteId).disposition)
+        assertEquals(NoteStatus.APPROVED, store().recordings().single().status)
+
+        val rejectedNoteId = "123e4567-e89b-12d3-a456-426614174001"
+        ready(rejectedNoteId)
+        assertEquals(TransitionDisposition.APPLIED, store().reject(rejectedNoteId).disposition)
+        assertEquals(TransitionDisposition.ALREADY_APPLIED, store().reject(rejectedNoteId).disposition)
+        assertEquals(TransitionDisposition.INVALID, store().approve(rejectedNoteId).disposition)
+        assertEquals(NoteStatus.REJECTED, store().recordings().first { it.noteId == rejectedNoteId }.status)
+
+        val transcribingNoteId = "123e4567-e89b-12d3-a456-426614174002"
+        store().receive(transcribingNoteId, 12, audio("third"))
+        assertEquals(TransitionDisposition.INVALID, store().approve(transcribingNoteId).disposition)
+        assertEquals(TransitionDisposition.INVALID, store().reject(transcribingNoteId).disposition)
+        assertEquals(NoteStatus.TRANSCRIBING, store().recordings().first { it.noteId == transcribingNoteId }.status)
+    }
+
+    @Test
+    fun `delivery transitions persist failure retry and success`() {
+        ready()
+        store().approve(noteId)
+
+        val firstAttempt = store().beginDelivery(noteId)
+        assertEquals(TransitionDisposition.APPLIED, firstAttempt.disposition)
+        assertEquals(1, firstAttempt.note.activeDeliveryAttempt)
+        assertEquals(2, firstAttempt.note.nextDeliveryAttempt)
+        assertEquals(TransitionDisposition.APPLIED, store().markDeliveryFailed(noteId, 1).disposition)
+        assertEquals(TransitionDisposition.ALREADY_APPLIED, store().markDeliveryFailed(noteId, 1).disposition)
+        assertEquals(TransitionDisposition.APPLIED, store().retryDelivery(noteId).disposition)
+
+        val secondAttempt = store().beginDelivery(noteId)
+        assertEquals(2, secondAttempt.note.activeDeliveryAttempt)
+        assertEquals(TransitionDisposition.APPLIED, store().markDelivered(noteId, 2).disposition)
+
+        val delivered = store().recordings().single().toReviewableNote()
+        assertEquals(NoteStatus.DELIVERED, delivered.status)
+        assertEquals(3, delivered.nextDeliveryAttempt)
+        assertNull(delivered.activeDeliveryAttempt)
+    }
+
+    @Test
+    fun `invalid delivery transitions do not change persisted state`() {
+        ready()
+        val ready = store().recordings().single().toReviewableNote()
+
+        assertEquals(TransitionDisposition.INVALID, store().beginDelivery(noteId).disposition)
+        assertEquals(TransitionDisposition.INVALID, store().retryDelivery(noteId).disposition)
+        assertEquals(TransitionDisposition.INVALID, store().markDelivered(noteId, 1).disposition)
+        assertEquals(TransitionDisposition.INVALID, store().markDeliveryFailed(noteId, 1).disposition)
+        assertEquals(ready, store().recordings().single().toReviewableNote())
+    }
+
+    @Test
+    fun `active delivery attempt survives recreation and begin is idempotent`() {
+        ready()
+        store().approve(noteId)
+        val started = store().beginDelivery(noteId)
+
+        val restarted = store().beginDelivery(noteId)
+
+        assertEquals(TransitionDisposition.ALREADY_APPLIED, restarted.disposition)
+        assertEquals(started.note, restarted.note)
+        assertEquals(started.note, store().recordings().single().toReviewableNote())
+    }
+
+    @Test
+    fun `stale delivery completion is rejected without changing active attempt`() {
+        ready()
+        store().approve(noteId)
+        store().beginDelivery(noteId)
+        store().markDeliveryFailed(noteId, 1)
+        store().retryDelivery(noteId)
+        val secondAttempt = store().beginDelivery(noteId).note
+
+        assertEquals(TransitionDisposition.INVALID, store().markDelivered(noteId, 1).disposition)
+        assertEquals(TransitionDisposition.INVALID, store().markDeliveryFailed(noteId, 1).disposition)
+        assertEquals(secondAttempt, store().recordings().single().toReviewableNote())
+    }
+
+    @Test
+    fun `delivery completion is idempotent`() {
+        ready()
+        store().approve(noteId)
+        store().beginDelivery(noteId)
+
+        val delivered = store().markDelivered(noteId, 1)
+        val repeated = store().markDelivered(noteId, 1)
+
+        assertEquals(TransitionDisposition.APPLIED, delivered.disposition)
+        assertEquals(TransitionDisposition.ALREADY_APPLIED, repeated.disposition)
+        assertEquals(delivered.note, repeated.note)
+    }
+
+    @Test
     fun `transcription repository persists success and attempt count`() {
         store().receive(noteId, 12, audio("first"))
         val repository = TranscriptionRepository(
@@ -177,6 +305,11 @@ class PhoneAudioStoreTest {
     }
 
     private fun store() = PhoneAudioStore(directory, metadata)
+
+    private fun ready(id: String = noteId) {
+        store().receive(id, 12, audio("audio"))
+        assertEquals(TransitionDisposition.APPLIED, store().markReadyForReview(id, "Transcript").disposition)
+    }
 
     private fun audio(value: String) = ByteArrayInputStream(value.encodeToByteArray())
 }

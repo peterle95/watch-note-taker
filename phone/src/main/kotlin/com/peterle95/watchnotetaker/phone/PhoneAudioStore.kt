@@ -6,12 +6,12 @@ import com.peterle95.watchnotetaker.notes.NoteCommand
 import com.peterle95.watchnotetaker.notes.NoteStateMachine
 import com.peterle95.watchnotetaker.notes.NoteStatus
 import com.peterle95.watchnotetaker.notes.ReviewableNote
+import com.peterle95.watchnotetaker.notes.Transition
+import com.peterle95.watchnotetaker.notes.TransitionDisposition
 import com.peterle95.watchnotetaker.transfer.WearDataProtocol
 import java.io.File
 import java.io.InputStream
 import java.time.Instant
-
-typealias PhoneNoteStatus = NoteStatus
 
 data class ReceivedRecording(
     val noteId: String,
@@ -23,6 +23,17 @@ data class ReceivedRecording(
     val transcriptionAttemptCount: Int,
     val lastTranscriptionError: String?,
     val nextTranscriptionRetryAtMillis: Long?,
+    val nextDeliveryAttempt: Long = 1,
+    val activeDeliveryAttempt: Long? = null,
+)
+
+fun ReceivedRecording.toReviewableNote() = ReviewableNote(
+    id = noteId,
+    transcript = transcript.orEmpty(),
+    status = status,
+    createdAt = createdAt,
+    nextDeliveryAttempt = nextDeliveryAttempt,
+    activeDeliveryAttempt = activeDeliveryAttempt,
 )
 
 data class RecordingMetadata(
@@ -33,6 +44,8 @@ data class RecordingMetadata(
     val transcriptionAttemptCount: Int = 0,
     val lastTranscriptionError: String? = null,
     val nextTranscriptionRetryAtMillis: Long? = null,
+    val nextDeliveryAttempt: Long = 1,
+    val activeDeliveryAttempt: Long? = null,
 )
 
 interface RecordingMetadataStore {
@@ -105,10 +118,12 @@ class PhoneAudioStore(
                     file = file,
                     transcript = metadata.transcript,
                     status = metadata.status,
-                    createdAt = Instant.ofEpochMilli(metadata.createdAtMillis.takeIf { it > 0 } ?: file.lastModified()),
+                    createdAt = Instant.ofEpochMilli(file.lastModified()),
                     transcriptionAttemptCount = metadata.transcriptionAttemptCount,
                     lastTranscriptionError = metadata.lastTranscriptionError,
                     nextTranscriptionRetryAtMillis = metadata.nextTranscriptionRetryAtMillis,
+                    nextDeliveryAttempt = metadata.nextDeliveryAttempt,
+                    activeDeliveryAttempt = metadata.activeDeliveryAttempt,
                 )
             }
         }
@@ -125,21 +140,8 @@ class PhoneAudioStore(
             require(current.transcript == normalized) { "Transcript conflicts with persisted transcript" }
             return
         }
-        val transition = NoteStateMachine.execute(
-            current.toReviewableNote(noteId, normalized),
-            NoteCommand.MarkReadyForReview,
-        )
+        val transition = markReadyForReview(noteId, normalized)
         check(transition.note.status == NoteStatus.READY_FOR_REVIEW) { "Recording cannot be transcribed from ${current.status}" }
-        save(
-            noteId,
-            current.copy(
-                transcript = normalized,
-                status = transition.note.status,
-                lastTranscriptionError = null,
-                nextTranscriptionRetryAtMillis = null,
-            ),
-            "Could not save transcript",
-        )
     }
 
     @Synchronized
@@ -189,31 +191,64 @@ class PhoneAudioStore(
         )
     }
 
-    fun decide(noteId: String, approved: Boolean): NoteStatus {
+    @Synchronized
+    fun markReadyForReview(noteId: String, transcript: String): Transition {
         require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
+        val normalized = transcript.trim()
+        require(normalized.isNotEmpty()) { "Transcript must not be blank" }
+        require(File(directory, "$noteId.m4a").isFile) { "Recording does not exist" }
         val current = metadata(noteId)
-        val transcript = current.transcript ?: return current.status
-        val transition = NoteStateMachine.execute(
-            current.toReviewableNote(noteId, transcript),
-            if (approved) NoteCommand.Approve else NoteCommand.Reject,
-        )
-        if (transition.note.status != current.status) {
-            save(noteId, current.copy(status = transition.note.status), "Could not save review decision")
-        }
-        return transition.note.status
+        current.transcript?.let { require(it == normalized) { "Transcript conflicts with persisted transcript" } }
+        return transition(noteId, current, NoteCommand.MarkReadyForReview, normalized)
     }
 
-    fun markDelivery(noteId: String, delivered: Boolean) {
+    @Synchronized
+    fun approve(noteId: String): Transition = transition(noteId, NoteCommand.Approve)
+
+    @Synchronized
+    fun reject(noteId: String): Transition = transition(noteId, NoteCommand.Reject)
+
+    @Synchronized
+    fun beginDelivery(noteId: String): Transition = transition(noteId, NoteCommand.BeginDelivery)
+
+    @Synchronized
+    fun markDelivered(noteId: String, attempt: Long): Transition =
+        transition(noteId, NoteCommand.MarkDelivered(attempt))
+
+    @Synchronized
+    fun markDeliveryFailed(noteId: String, attempt: Long): Transition =
+        transition(noteId, NoteCommand.MarkDeliveryFailed(attempt))
+
+    @Synchronized
+    fun retryDelivery(noteId: String): Transition = transition(noteId, NoteCommand.RetryDelivery)
+
+    private fun transition(noteId: String, command: NoteCommand): Transition {
         require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
-        val current = metadata(noteId)
-        require(current.status == NoteStatus.APPROVED || current.status == NoteStatus.DELIVERY_FAILED) {
-            "Only approved notes can be delivered"
+        return transition(noteId, metadata(noteId), command)
+    }
+
+    private fun transition(
+        noteId: String,
+        current: RecordingMetadata,
+        command: NoteCommand,
+        transcript: String? = current.transcript,
+    ): Transition {
+        val transition = NoteStateMachine.execute(current.toReviewableNote(noteId, transcript.orEmpty()), command)
+        if (transition.disposition == TransitionDisposition.APPLIED) {
+            save(
+                noteId,
+                current.copy(
+                    transcript = transcript,
+                    status = transition.note.status,
+                    lastTranscriptionError = if (command == NoteCommand.MarkReadyForReview) null else current.lastTranscriptionError,
+                    nextTranscriptionRetryAtMillis = if (command == NoteCommand.MarkReadyForReview) null else current.nextTranscriptionRetryAtMillis,
+                    nextDeliveryAttempt = transition.note.nextDeliveryAttempt,
+                    activeDeliveryAttempt = transition.note.activeDeliveryAttempt,
+                ),
+                "Could not save note transition",
+            )
         }
-        save(
-            noteId,
-            current.copy(status = if (delivered) NoteStatus.DELIVERED else NoteStatus.DELIVERY_FAILED),
-            "Could not save delivery status",
-        )
+        return transition
     }
 
     private fun metadata(noteId: String): RecordingMetadata =
@@ -227,7 +262,9 @@ class PhoneAudioStore(
         id = noteId,
         transcript = transcript,
         status = status,
-        createdAt = Instant.ofEpochMilli(createdAtMillis),
+        createdAt = Instant.ofEpochMilli(File(directory, "$noteId.m4a").lastModified()),
+        nextDeliveryAttempt = nextDeliveryAttempt,
+        activeDeliveryAttempt = activeDeliveryAttempt,
     )
 
     companion object {
@@ -252,6 +289,8 @@ private class SharedPreferencesRecordingMetadataStore(
             transcriptionAttemptCount = preferences.getInt("transcriptionAttempts.$noteId", 0),
             lastTranscriptionError = preferences.getString("transcriptionError.$noteId", null),
             nextTranscriptionRetryAtMillis = preferences.longOrNull("transcriptionRetry.$noteId"),
+            nextDeliveryAttempt = preferences.getLong("nextDeliveryAttempt.$noteId", 1),
+            activeDeliveryAttempt = preferences.longOrNull("activeDeliveryAttempt.$noteId"),
         )
     }
 
@@ -263,6 +302,8 @@ private class SharedPreferencesRecordingMetadataStore(
         .putNullableString("transcript.$noteId", metadata.transcript)
         .putNullableString("transcriptionError.$noteId", metadata.lastTranscriptionError)
         .putNullableLong("transcriptionRetry.$noteId", metadata.nextTranscriptionRetryAtMillis)
+        .putLong("nextDeliveryAttempt.$noteId", metadata.nextDeliveryAttempt)
+        .putNullableLong("activeDeliveryAttempt.$noteId", metadata.activeDeliveryAttempt)
         .commit()
 
     override fun remove(noteId: String): Boolean = preferences.edit()
@@ -273,6 +314,8 @@ private class SharedPreferencesRecordingMetadataStore(
         .remove("transcriptionAttempts.$noteId")
         .remove("transcriptionError.$noteId")
         .remove("transcriptionRetry.$noteId")
+        .remove("nextDeliveryAttempt.$noteId")
+        .remove("activeDeliveryAttempt.$noteId")
         .commit()
 
     private fun SharedPreferences.longOrNull(key: String): Long? = if (contains(key)) getLong(key, 0) else null
