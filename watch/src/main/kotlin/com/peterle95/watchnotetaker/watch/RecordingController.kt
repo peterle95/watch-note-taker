@@ -19,6 +19,7 @@ class RecordingController(
     private var output: File? = null
     private var startedAt = 0L
 
+    @Synchronized
     fun start() {
         check(recorder == null) { "A recording is already in progress" }
         recordingsDirectory.mkdirs()
@@ -30,13 +31,19 @@ class RecordingController(
             setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             setOutputFile(output!!.absolutePath)
             setMaxDuration(MAX_DURATION_MILLIS)
+            setOnInfoListener { _, what, _ ->
+                if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) finish(recorderAlreadyStopped = true)
+            }
             prepare()
             start()
         }
         handler.postDelayed(stopAtMaximumDuration, MAX_DURATION_MILLIS.toLong())
     }
 
-    fun stop() {
+    fun stop() = finish(recorderAlreadyStopped = false)
+
+    @Synchronized
+    private fun finish(recorderAlreadyStopped: Boolean) {
         val activeRecorder = recorder ?: return
         recorder = null
         handler.removeCallbacks(stopAtMaximumDuration)
@@ -45,7 +52,8 @@ class RecordingController(
         val durationSeconds = ((System.currentTimeMillis() - startedAt + 999) / 1_000)
             .toInt()
             .coerceIn(1, MAX_DURATION_SECONDS)
-        runCatching { activeRecorder.stop() }
+        val result = if (recorderAlreadyStopped) Result.success(Unit) else runCatching { activeRecorder.stop() }
+        result
             .onSuccess { onFinished(recording, durationSeconds) }
             .onFailure {
                 recording.delete()
