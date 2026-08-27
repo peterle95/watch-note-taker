@@ -17,11 +17,16 @@ class WatchAudioQueue(context: Context) {
         if (entries().size >= CAPACITY) return false
         directory.mkdirs()
         val target = File(directory, recording.name)
-        if (!recording.renameTo(target)) {
-            recording.copyTo(target, overwrite = false)
-            recording.delete()
+        check(preferences.edit().putInt(target.name, durationSeconds).commit()) { "Could not save recording metadata" }
+        try {
+            if (!recording.renameTo(target)) {
+                recording.copyTo(target, overwrite = false)
+                recording.delete()
+            }
+        } catch (error: Exception) {
+            preferences.edit().remove(target.name).commit()
+            throw error
         }
-        preferences.edit().putInt(target.name, durationSeconds).apply()
         return true
     }
 
@@ -40,7 +45,7 @@ class WatchAudioQueue(context: Context) {
     fun remove(noteId: String) {
         if (!noteId.matches(NOTE_ID)) return
         val file = File(directory, "$noteId.m4a")
-        if (file.delete()) preferences.edit().remove(file.name).apply()
+        if (file.delete()) preferences.edit().remove(file.name).commit()
     }
 
     companion object {

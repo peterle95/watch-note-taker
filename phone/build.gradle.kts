@@ -9,7 +9,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.peterle95.watchnotetaker.phone"
+        applicationId = "com.peterle95.watchnotetaker"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
