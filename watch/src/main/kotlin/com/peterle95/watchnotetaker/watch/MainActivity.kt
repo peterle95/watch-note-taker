@@ -18,18 +18,35 @@ import androidx.wear.compose.material.ScalingLazyColumn
 class MainActivity : ComponentActivity() {
     private var recording by mutableStateOf(false)
     private var status by mutableStateOf("Ready to record")
+    private var queuedRecordings by mutableStateOf(0)
     private lateinit var recordingController: RecordingController
+    private lateinit var audioQueue: WatchAudioQueue
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startRecording() else status = "Microphone permission is required"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        audioQueue = WatchAudioQueue(this)
+        queuedRecordings = audioQueue.entries().size
         recordingController = RecordingController(
             context = this,
-            onFinished = { _, duration ->
+            onFinished = { recordingFile, duration ->
                 recording = false
-                status = "Recorded ${duration}s"
+                runCatching { audioQueue.enqueue(recordingFile, duration) }
+                    .onSuccess { queued ->
+                        if (queued) {
+                            queuedRecordings = audioQueue.entries().size
+                            status = "Queued ${duration}s recording"
+                        } else {
+                            recordingFile.delete()
+                            status = "Queue full. Send recordings first."
+                        }
+                    }
+                    .onFailure {
+                        recordingFile.delete()
+                        status = "Could not save recording. Try again."
+                    }
             },
             onFailure = { message ->
                 recording = false
@@ -46,6 +63,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     item { Text(status) }
+                    item { Text("$queuedRecordings recordings queued") }
                 }
             }
         }
@@ -57,6 +75,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestRecording() {
+        if (audioQueue.entries().size >= WatchAudioQueue.CAPACITY) {
+            status = "Queue full. Send recordings first."
+            return
+        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startRecording()
         } else {
