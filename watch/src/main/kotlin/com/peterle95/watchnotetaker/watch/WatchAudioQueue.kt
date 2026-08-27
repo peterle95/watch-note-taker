@@ -1,6 +1,7 @@
 package com.peterle95.watchnotetaker.watch
 
 import android.content.Context
+import com.peterle95.watchnotetaker.transfer.WearDataProtocol
 import java.io.File
 
 data class QueuedWatchAudio(
@@ -42,14 +43,27 @@ class WatchAudioQueue(context: Context) {
         }
         ?: emptyList()
 
-    fun remove(noteId: String) {
-        if (!noteId.matches(NOTE_ID)) return
+    fun remove(noteId: String): Boolean {
+        if (!WearDataProtocol.isValidNoteId(noteId)) return false
         val file = File(directory, "$noteId.m4a")
-        if (file.delete()) preferences.edit().remove(file.name).commit()
+        if (!file.delete()) return false
+        preferences.edit().remove(file.name).commit()
+        return true
+    }
+
+    fun markSent(noteId: String, nodeId: String) {
+        require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
+        check(preferences.edit().putString("sent-node.$noteId", nodeId).commit()) { "Could not save target node" }
+    }
+
+    fun acknowledge(noteId: String, nodeId: String): Boolean {
+        if (preferences.getString("sent-node.$noteId", null) != nodeId) return false
+        val removed = remove(noteId)
+        if (removed) preferences.edit().remove("sent-node.$noteId").commit()
+        return removed
     }
 
     companion object {
         const val CAPACITY = 10
-        private val NOTE_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
     }
 }

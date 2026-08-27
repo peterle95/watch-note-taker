@@ -64,6 +64,16 @@ class PhoneAudioStoreTest {
     }
 
     @Test
+    fun `truncated channel payload is not exposed or acknowledged as complete`() {
+        assertFailsWith<IllegalArgumentException> {
+            store().receive(noteId, 10, audio("short"), expectedBytes = 100)
+        }
+
+        assertTrue(store().recordings().isEmpty())
+        assertTrue(directory.listFiles().orEmpty().none { it.extension == "m4a" })
+    }
+
+    @Test
     fun `failed transcription remains retryable`() {
         store().receive(noteId, 12, audio("first"))
         store().recordTranscriptionFailure(noteId, 2, "server", 2_000)

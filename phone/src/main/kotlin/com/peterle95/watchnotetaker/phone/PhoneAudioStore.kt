@@ -6,6 +6,7 @@ import com.peterle95.watchnotetaker.notes.NoteCommand
 import com.peterle95.watchnotetaker.notes.NoteStateMachine
 import com.peterle95.watchnotetaker.notes.NoteStatus
 import com.peterle95.watchnotetaker.notes.ReviewableNote
+import com.peterle95.watchnotetaker.transfer.WearDataProtocol
 import java.io.File
 import java.io.InputStream
 import java.time.Instant
@@ -51,10 +52,10 @@ class PhoneAudioStore(
         ),
     )
 
-    @Synchronized
-    fun receive(noteId: String, durationSeconds: Int, input: InputStream) {
-        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+    fun receive(noteId: String, durationSeconds: Int, input: InputStream, expectedBytes: Long? = null) = synchronized(RECEIVE_LOCK) {
+        require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
         require(durationSeconds in 1..120) { "Invalid recording duration" }
+        require(expectedBytes == null || expectedBytes in 1..MAX_AUDIO_BYTES) { "Invalid recording size" }
         directory.mkdirs()
         val target = File(directory, "$noteId.m4a")
         if (target.isFile) {
@@ -63,7 +64,7 @@ class PhoneAudioStore(
                     "Could not save recording metadata"
                 }
             }
-            return
+            return@synchronized
         }
 
         val temporary = File.createTempFile(".$noteId-", ".tmp", directory)
@@ -78,6 +79,7 @@ class PhoneAudioStore(
                     require(bytes <= MAX_AUDIO_BYTES) { "Recording is too large" }
                     output.write(buffer, 0, count)
                 }
+                require(expectedBytes == null || bytes == expectedBytes) { "Incomplete recording" }
                 output.fd.sync()
             }
             check(metadataStore.save(noteId, RecordingMetadata(durationSeconds, System.currentTimeMillis()))) {
@@ -114,7 +116,7 @@ class PhoneAudioStore(
 
     @Synchronized
     fun saveTranscript(noteId: String, transcript: String) {
-        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
         val normalized = transcript.trim()
         require(normalized.isNotEmpty()) { "Transcript must not be blank" }
         require(File(directory, "$noteId.m4a").isFile) { "Recording does not exist" }
@@ -142,7 +144,7 @@ class PhoneAudioStore(
 
     @Synchronized
     fun startTranscriptionAttempt(noteId: String): ReceivedRecording {
-        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
         val current = metadata(noteId)
         check(current.status == NoteStatus.TRANSCRIBING && current.transcript == null) { "Recording is not awaiting transcription" }
         save(
@@ -159,7 +161,7 @@ class PhoneAudioStore(
 
     @Synchronized
     fun recordTranscriptionFailure(noteId: String, attemptCount: Int, error: String, nextRetryAtMillis: Long?) {
-        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
         require(attemptCount > 0) { "Attempt count must be positive" }
         require(error.isNotBlank()) { "Transcription error must not be blank" }
         val current = metadata(noteId)
@@ -177,7 +179,7 @@ class PhoneAudioStore(
 
     @Synchronized
     fun retryTranscription(noteId: String, nowMillis: Long) {
-        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
         val current = metadata(noteId)
         check(current.status == NoteStatus.TRANSCRIBING && current.transcript == null) { "Recording is not awaiting transcription" }
         save(
@@ -188,7 +190,7 @@ class PhoneAudioStore(
     }
 
     fun decide(noteId: String, approved: Boolean): NoteStatus {
-        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
         val current = metadata(noteId)
         val transcript = current.transcript ?: return current.status
         val transition = NoteStateMachine.execute(
@@ -202,7 +204,7 @@ class PhoneAudioStore(
     }
 
     fun markDelivery(noteId: String, delivered: Boolean) {
-        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        require(WearDataProtocol.isValidNoteId(noteId)) { "Invalid note ID" }
         val current = metadata(noteId)
         require(current.status == NoteStatus.APPROVED || current.status == NoteStatus.DELIVERY_FAILED) {
             "Only approved notes can be delivered"
@@ -230,7 +232,7 @@ class PhoneAudioStore(
 
     companion object {
         const val MAX_AUDIO_BYTES = 25L * 1_024 * 1_024
-        private val NOTE_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        private val RECEIVE_LOCK = Any()
     }
 }
 

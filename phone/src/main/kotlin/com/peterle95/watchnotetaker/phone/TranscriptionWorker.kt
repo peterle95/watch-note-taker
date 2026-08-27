@@ -6,6 +6,7 @@ import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.Operation
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
@@ -41,12 +42,12 @@ class TranscriptionWorker(
 }
 
 object TranscriptionWork {
-    fun enqueue(context: Context) {
+    fun enqueue(context: Context): Operation {
         val request = OneTimeWorkRequestBuilder<TranscriptionWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(
+        return WorkManager.getInstance(context).enqueueUniqueWork(
             "phone-transcription",
             ExistingWorkPolicy.APPEND_OR_REPLACE,
             request,

@@ -4,7 +4,11 @@
     <application android:theme="@style/Theme.WatchNoteTaker" android:label="Watch Note Taker">
         <service android:name=".RecordingAcknowledgementService" android:exported="true">
             <intent-filter>
-                <action android:name="com.google.android.gms.wearable.BIND_LISTENER" />
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:path="/recordings/ack" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.NODE_CHANGED" />
             </intent-filter>
         </service>
         <activity android:name=".MainActivity" android:exported="true">

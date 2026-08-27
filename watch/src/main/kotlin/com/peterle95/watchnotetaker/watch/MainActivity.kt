@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
         audioQueue = WatchAudioQueue(this)
         queuedRecordings = audioQueue.entries().size
         recordingTransfer = WearRecordingTransfer(this, audioQueue) { status = it }
+        if (queuedRecordings > 0) recordingTransfer.sendQueuedRecordings()
         recordingController = RecordingController(
             context = this,
             onFinished = { recordingFile, duration ->
