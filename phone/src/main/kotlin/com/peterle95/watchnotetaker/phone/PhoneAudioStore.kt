@@ -51,6 +51,7 @@ class PhoneAudioStore(
         ),
     )
 
+    @Synchronized
     fun receive(noteId: String, durationSeconds: Int, input: InputStream) {
         require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
         require(durationSeconds in 1..120) { "Invalid recording duration" }
@@ -68,7 +69,15 @@ class PhoneAudioStore(
         val temporary = File.createTempFile(".$noteId-", ".tmp", directory)
         try {
             temporary.outputStream().use { output ->
-                input.copyTo(output)
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var bytes = 0L
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    bytes += count
+                    require(bytes <= MAX_AUDIO_BYTES) { "Recording is too large" }
+                    output.write(buffer, 0, count)
+                }
                 output.fd.sync()
             }
             check(metadataStore.save(noteId, RecordingMetadata(durationSeconds, System.currentTimeMillis()))) {
@@ -103,6 +112,7 @@ class PhoneAudioStore(
         }
         ?: emptyList()
 
+    @Synchronized
     fun saveTranscript(noteId: String, transcript: String) {
         require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
         val normalized = transcript.trim()
@@ -130,6 +140,24 @@ class PhoneAudioStore(
         )
     }
 
+    @Synchronized
+    fun startTranscriptionAttempt(noteId: String): ReceivedRecording {
+        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        val current = metadata(noteId)
+        check(current.status == NoteStatus.TRANSCRIBING && current.transcript == null) { "Recording is not awaiting transcription" }
+        save(
+            noteId,
+            current.copy(
+                transcriptionAttemptCount = current.transcriptionAttemptCount + 1,
+                lastTranscriptionError = null,
+                nextTranscriptionRetryAtMillis = null,
+            ),
+            "Could not save transcription attempt",
+        )
+        return recordings().first { it.noteId == noteId }
+    }
+
+    @Synchronized
     fun recordTranscriptionFailure(noteId: String, attemptCount: Int, error: String, nextRetryAtMillis: Long?) {
         require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
         require(attemptCount > 0) { "Attempt count must be positive" }
@@ -144,6 +172,18 @@ class PhoneAudioStore(
                 nextTranscriptionRetryAtMillis = nextRetryAtMillis,
             ),
             "Could not save transcription failure",
+        )
+    }
+
+    @Synchronized
+    fun retryTranscription(noteId: String, nowMillis: Long) {
+        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        val current = metadata(noteId)
+        check(current.status == NoteStatus.TRANSCRIBING && current.transcript == null) { "Recording is not awaiting transcription" }
+        save(
+            noteId,
+            current.copy(lastTranscriptionError = null, nextTranscriptionRetryAtMillis = nowMillis),
+            "Could not retry transcription",
         )
     }
 
@@ -189,6 +229,7 @@ class PhoneAudioStore(
     )
 
     companion object {
+        const val MAX_AUDIO_BYTES = 25L * 1_024 * 1_024
         private val NOTE_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
     }
 }

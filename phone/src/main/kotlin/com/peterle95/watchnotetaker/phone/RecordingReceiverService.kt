@@ -19,6 +19,7 @@ class RecordingReceiverService : WearableListenerService() {
                     }
                 }.isSuccess
                 if (received) {
+                    TranscriptionWork.enqueue(this)
                     Tasks.await(
                         Wearable.getMessageClient(this).sendMessage(
                             channel.nodeId,

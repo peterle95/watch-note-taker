@@ -91,6 +91,81 @@ class PhoneAudioStoreTest {
         assertEquals(NoteStatus.READY_FOR_REVIEW, recording.status)
     }
 
+    @Test
+    fun `transcription repository persists success and attempt count`() {
+        store().receive(noteId, 12, audio("first"))
+        val repository = TranscriptionRepository(
+            store(),
+            QueueTranscriptionClient(TranscriptionResult.Success("Transcript")),
+        )
+
+        assertEquals(TranscriptionRun.COMPLETED, repository.runNext(1_000))
+
+        val recording = store().recordings().single()
+        assertEquals(1, recording.transcriptionAttemptCount)
+        assertEquals("Transcript", recording.transcript)
+        assertEquals(NoteStatus.READY_FOR_REVIEW, recording.status)
+    }
+
+    @Test
+    fun `transient failure waits for bounded retry and keeps audio`() {
+        store().receive(noteId, 12, audio("first"))
+        val repository = TranscriptionRepository(
+            store(),
+            QueueTranscriptionClient(
+                TranscriptionResult.NetworkFailure,
+                TranscriptionResult.Success("Recovered"),
+            ),
+        )
+
+        assertEquals(TranscriptionRun.RETRY_SCHEDULED, repository.runNext(1_000))
+        assertEquals(TranscriptionRun.WAITING, repository.runNext(1_001))
+        val retryAt = store().recordings().single().nextTranscriptionRetryAtMillis!!
+        assertEquals(TranscriptionRun.COMPLETED, repository.runNext(retryAt))
+
+        val recording = store().recordings().single()
+        assertEquals(2, recording.transcriptionAttemptCount)
+        assertEquals("Recovered", recording.transcript)
+        assertTrue(recording.file.isFile)
+    }
+
+    @Test
+    fun `authentication failure does not retry automatically`() {
+        store().receive(noteId, 12, audio("first"))
+        val client = QueueTranscriptionClient(TranscriptionResult.AuthenticationFailure)
+        val repository = TranscriptionRepository(store(), client)
+
+        assertEquals(TranscriptionRun.BLOCKED, repository.runNext(1_000))
+        assertEquals(TranscriptionRun.IDLE, repository.runNext(100_000))
+        assertEquals(1, client.calls)
+        assertNull(store().recordings().single().nextTranscriptionRetryAtMillis)
+    }
+
+    @Test
+    fun `restart during a transcription attempt remains retryable`() {
+        store().receive(noteId, 12, audio("first"))
+        store().recordTranscriptionFailure(noteId, 1, "network", 1_000)
+        store().startTranscriptionAttempt(noteId)
+
+        val repository = TranscriptionRepository(
+            store(),
+            QueueTranscriptionClient(TranscriptionResult.Success("Recovered after restart")),
+        )
+
+        assertEquals(TranscriptionRun.COMPLETED, repository.runNext(2_000))
+        assertEquals("Recovered after restart", store().recordings().single().transcript)
+    }
+
+    @Test
+    fun `manual client uses normal transcription persistence`() {
+        store().receive(noteId, 12, audio("first"))
+
+        TranscriptionRepository(store(), ManualTranscriptionClient(" Manual ")).runNext(1_000)
+
+        assertEquals("Manual", store().recordings().single().transcript)
+        assertEquals(NoteStatus.READY_FOR_REVIEW, store().recordings().single().status)
+    }
+
     private fun store() = PhoneAudioStore(directory, metadata)
 
     private fun audio(value: String) = ByteArrayInputStream(value.encodeToByteArray())
@@ -113,4 +188,14 @@ private class FailingRecordingMetadataStore : RecordingMetadataStore {
     override fun load(noteId: String): RecordingMetadata? = null
     override fun save(noteId: String, metadata: RecordingMetadata): Boolean = false
     override fun remove(noteId: String): Boolean = true
+}
+
+private class QueueTranscriptionClient(vararg results: TranscriptionResult) : TranscriptionClient {
+    private val results = ArrayDeque(results.toList())
+    var calls = 0
+
+    override fun transcribe(audio: ReceivedRecording): TranscriptionResult {
+        calls++
+        return results.removeFirst()
+    }
 }
