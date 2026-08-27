@@ -4,11 +4,21 @@ import android.content.Context
 import java.io.File
 import java.io.InputStream
 
+enum class PhoneNoteStatus {
+    TRANSCRIBING,
+    READY_FOR_REVIEW,
+    APPROVED,
+    REJECTED,
+    DELIVERED,
+    DELIVERY_FAILED,
+}
+
 data class ReceivedRecording(
     val noteId: String,
     val durationSeconds: Int,
     val file: File,
     val transcript: String?,
+    val status: PhoneNoteStatus,
 )
 
 class PhoneAudioStore(context: Context) {
@@ -32,7 +42,12 @@ class PhoneAudioStore(context: Context) {
                 temporary.delete()
             }
         }
-        check(preferences.edit().putInt(target.name, durationSeconds).commit()) { "Could not save recording metadata" }
+        check(
+            preferences.edit()
+                .putInt(target.name, durationSeconds)
+                .also { if (!preferences.contains("status.$noteId")) it.putString("status.$noteId", PhoneNoteStatus.TRANSCRIBING.name) }
+                .commit(),
+        ) { "Could not save recording metadata" }
     }
 
     fun recordings(): List<ReceivedRecording> = directory.listFiles()
@@ -44,6 +59,7 @@ class PhoneAudioStore(context: Context) {
                 durationSeconds = preferences.getInt(file.name, 0),
                 file = file,
                 transcript = preferences.getString("transcript.${file.nameWithoutExtension}", null),
+                status = preferences.noteStatus(file.nameWithoutExtension),
             )
         }
         ?: emptyList()
@@ -52,10 +68,31 @@ class PhoneAudioStore(context: Context) {
         require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
         require(transcript.isNotBlank()) { "Transcript must not be blank" }
         require(File(directory, "$noteId.m4a").isFile) { "Recording does not exist" }
-        check(preferences.edit().putString("transcript.$noteId", transcript.trim()).commit()) {
+        check(
+            preferences.edit()
+                .putString("transcript.$noteId", transcript.trim())
+                .putString("status.$noteId", PhoneNoteStatus.READY_FOR_REVIEW.name)
+                .commit(),
+        ) {
             "Could not save transcript"
         }
     }
+
+    fun decide(noteId: String, approved: Boolean): PhoneNoteStatus {
+        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        val current = preferences.noteStatus(noteId)
+        val decision = if (approved) PhoneNoteStatus.APPROVED else PhoneNoteStatus.REJECTED
+        if (current != PhoneNoteStatus.READY_FOR_REVIEW && current != decision) return current
+        check(preferences.edit().putString("status.$noteId", decision.name).commit()) {
+            "Could not save review decision"
+        }
+        return decision
+    }
+
+    private fun android.content.SharedPreferences.noteStatus(noteId: String): PhoneNoteStatus =
+        getString("status.$noteId", PhoneNoteStatus.TRANSCRIBING.name)
+            ?.let(PhoneNoteStatus::valueOf)
+            ?: PhoneNoteStatus.TRANSCRIBING
 
     companion object {
         private val NOTE_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")

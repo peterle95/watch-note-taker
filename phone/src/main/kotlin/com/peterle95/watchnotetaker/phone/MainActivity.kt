@@ -20,6 +20,7 @@ class MainActivity : ComponentActivity() {
             var recordings by remember { mutableStateOf(store.recordings()) }
             var recordingForTranscript by remember { mutableStateOf<ReceivedRecording?>(null) }
             var transcript by remember { mutableStateOf("") }
+            var reviewDecision by remember { mutableStateOf<Pair<ReceivedRecording, Boolean>?>(null) }
             var message by remember { mutableStateOf<String?>(null) }
             Column {
                 Text("Watch Note Taker")
@@ -33,8 +34,32 @@ class MainActivity : ComponentActivity() {
                             transcript = ""
                         }) { Text("Enter transcript") }
                     } else {
-                        Text("Transcript ready")
+                        Text(recording.transcript)
+                        when (recording.status) {
+                            PhoneNoteStatus.READY_FOR_REVIEW -> {
+                                Button(onClick = {
+                                    reviewDecision = recording to true
+                                }) { Text("Approve") }
+                                Button(onClick = {
+                                    reviewDecision = recording to false
+                                }) { Text("Reject") }
+                            }
+                            PhoneNoteStatus.APPROVED -> Text("Approved for Markdown delivery")
+                            PhoneNoteStatus.REJECTED -> Text("Rejected")
+                            PhoneNoteStatus.DELIVERED -> Text("Delivered")
+                            PhoneNoteStatus.DELIVERY_FAILED -> Text("Markdown delivery failed")
+                            PhoneNoteStatus.TRANSCRIBING -> Text("Transcribing")
+                        }
                     }
+                }
+                reviewDecision?.let { (recording, approved) ->
+                    Text("${if (approved) "Approve" else "Reject"} this transcript?")
+                    Button(onClick = {
+                        store.decide(recording.noteId, approved)
+                        recordings = store.recordings()
+                        reviewDecision = null
+                    }) { Text("Confirm") }
+                    Button(onClick = { reviewDecision = null }) { Text("Cancel") }
                 }
                 recordingForTranscript?.let { recording ->
                     OutlinedTextField(
