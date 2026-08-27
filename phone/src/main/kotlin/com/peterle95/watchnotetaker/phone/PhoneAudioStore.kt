@@ -89,6 +89,18 @@ class PhoneAudioStore(context: Context) {
         return decision
     }
 
+    fun markDelivery(noteId: String, delivered: Boolean) {
+        require(noteId.matches(NOTE_ID)) { "Invalid note ID" }
+        val current = preferences.noteStatus(noteId)
+        require(current == PhoneNoteStatus.APPROVED || current == PhoneNoteStatus.DELIVERY_FAILED) {
+            "Only approved notes can be delivered"
+        }
+        val result = if (delivered) PhoneNoteStatus.DELIVERED else PhoneNoteStatus.DELIVERY_FAILED
+        check(preferences.edit().putString("status.$noteId", result.name).commit()) {
+            "Could not save delivery status"
+        }
+    }
+
     private fun android.content.SharedPreferences.noteStatus(noteId: String): PhoneNoteStatus =
         getString("status.$noteId", PhoneNoteStatus.TRANSCRIBING.name)
             ?.let(PhoneNoteStatus::valueOf)

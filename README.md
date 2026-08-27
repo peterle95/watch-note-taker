@@ -10,6 +10,9 @@ Kotlin/JVM domain core for the Wear OS voice-note MVP.
 - Durable, retryable review-decision outbox
 - Crash-safe file-backed outbox persistence, using atomic replacement where supported
 - Idempotent Markdown delivery with stable note filenames
+- Watch microphone capture capped at 120 seconds, with a durable ten-recording queue
+- Wear Data Layer audio transfer with phone-side durable acknowledgement
+- Phone developer transcript entry, review decisions, and persisted vault-folder delivery
 
 The implementation is intentionally transport- and UI-independent. `ReviewDecisionTransport`,
 `FoldReviewableNoteSource`, and `MarkdownDeliveryTransport` are the integration seams for the
@@ -23,7 +26,5 @@ gradlew.bat test
 
 ## Current scope
 
-Debug Android modules now exist for the phone and watch, but they are still shell applications.
-The parent MVP still needs real microphone capture, Wear Data Layer transport, backend
-authentication and bounded transcription, vault configuration, permissions/setup, and end-to-end
-release validation.
+The Android apps support a local developer transcript workflow. Production transcription still
+requires the authenticated, bounded backend described in `docs/research/transcription-providers.md`.

@@ -42,4 +42,17 @@ class MarkdownDeliveryTest {
         assertEquals(NoteStatus.DELIVERED, worker.deliver(failed).status)
         assertFalse(Files.list(vault).use { it.anyMatch { true } })
     }
+
+    @Test
+    fun `conflicting existing Markdown remains untouched and is retryable`() {
+        val vault = Files.createTempDirectory("vault")
+        val note = ReviewableNote("stable", "hello", NoteStatus.APPROVED, Instant.parse("2024-01-02T03:04:05Z"))
+        val target = vault.resolve("2024-01-02T03-04-05Z-stable.md")
+        Files.writeString(target, "different note")
+
+        val result = MarkdownDeliveryWorker(FileMarkdownDeliveryTransport(vault)).deliver(note)
+
+        assertEquals(NoteStatus.DELIVERY_FAILED, result.status)
+        assertEquals("different note", Files.readString(target))
+    }
 }
