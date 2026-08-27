@@ -5,6 +5,16 @@ plugins {
 }
 
 val backendUrl = providers.gradleProperty("BACKEND_URL").orElse("").get()
+fun secret(name: String) = providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orNull
+val releaseStoreFile = secret("RELEASE_STORE_FILE")
+val releaseStorePassword = secret("RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = secret("RELEASE_KEY_ALIAS")
+val releaseKeyPassword = secret("RELEASE_KEY_PASSWORD")
+val releaseSecrets = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+check(releaseSecrets.count { it != null } in setOf(0, 4)) { "Configure all RELEASE_* signing values or none" }
+if (gradle.startParameter.taskNames.any { it.endsWith("assembleRelease") || it.endsWith("bundleRelease") }) {
+    check(releaseSecrets.all { it != null }) { "Release packaging requires RELEASE_* signing values" }
+}
 
 android {
     namespace = "com.peterle95.watchnotetaker.phone"
@@ -18,13 +28,30 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "BACKEND_URL", "\"${backendUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        manifestPlaceholders["allowCleartext"] = "false"
     }
     buildFeatures { buildConfig = true }
+    signingConfigs {
+        if (releaseSecrets.all { it != null }) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["allowCleartext"] = "true"
             buildConfigField("boolean", "MANUAL_TRANSCRIPTION_ENABLED", "true")
         }
-        release { buildConfigField("boolean", "MANUAL_TRANSCRIPTION_ENABLED", "false") }
+        release {
+            buildConfigField("boolean", "MANUAL_TRANSCRIPTION_ENABLED", "false")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8

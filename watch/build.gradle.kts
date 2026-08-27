@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+fun secret(name: String) = providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orNull
+val releaseStoreFile = secret("RELEASE_STORE_FILE")
+val releaseStorePassword = secret("RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = secret("RELEASE_KEY_ALIAS")
+val releaseKeyPassword = secret("RELEASE_KEY_PASSWORD")
+val releaseSecrets = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+check(releaseSecrets.count { it != null } in setOf(0, 4)) { "Configure all RELEASE_* signing values or none" }
+if (gradle.startParameter.taskNames.any { it.endsWith("assembleRelease") || it.endsWith("bundleRelease") }) {
+    check(releaseSecrets.all { it != null }) { "Release packaging requires RELEASE_* signing values" }
+}
+
 android {
     namespace = "com.peterle95.watchnotetaker.watch"
     compileSdk = 35
@@ -15,10 +26,29 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["allowCleartext"] = "false"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
+    }
+    signingConfigs {
+        if (releaseSecrets.all { it != null }) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["allowCleartext"] = "true"
+        }
+        release { signingConfigs.findByName("release")?.let { signingConfig = it } }
     }
 }
 

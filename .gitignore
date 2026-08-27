@@ -2,3 +2,7 @@
 .kotlin/
 build/
 *.hprof
+*.jks
+*.keystore
+local.properties
+release-signing.properties

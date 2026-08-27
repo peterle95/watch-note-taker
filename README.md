@@ -35,6 +35,19 @@ Configure the backend URL at build time:
 .\gradlew.bat -PBACKEND_URL=https://transcribe.example.com/v1/transcriptions :phone:assembleDebug :watch:assembleDebug
 ```
 
+Release APK/AAB packaging requires the same signing key configuration for both modules. Supply all four values as Gradle properties or environment variables:
+
+- `RELEASE_STORE_FILE`
+- `RELEASE_STORE_PASSWORD`
+- `RELEASE_KEY_ALIAS`
+- `RELEASE_KEY_PASSWORD`
+
+```powershell
+.\gradlew.bat -PBACKEND_URL=https://transcribe.example.com/v1/transcriptions -PRELEASE_STORE_FILE=C:\secure\release.jks -PRELEASE_STORE_PASSWORD=... -PRELEASE_KEY_ALIAS=... -PRELEASE_KEY_PASSWORD=... :phone:assembleRelease :watch:assembleRelease :phone:bundleRelease :watch:bundleRelease
+```
+
+Release packaging fails if signing values are absent or incomplete. Keystores, `local.properties`, and release signing property files are ignored by Git.
+
 Debug APKs are generated at:
 
 - `phone/build/outputs/apk/debug/phone-debug.apk`

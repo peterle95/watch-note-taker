@@ -8,12 +8,13 @@ import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class HttpTranscriptionClientTest {
     @Test
     fun `uploads authenticated audio with stable note metadata`() {
         TestHttpServer(200, "transcribed text").use { server ->
-            val result = HttpTranscriptionClient(server.url, "device-token").transcribe(recording("audio"))
+            val result = HttpTranscriptionClient(server.url, "device-token", allowInsecure = true).transcribe(recording("audio"))
 
             assertEquals(TranscriptionResult.Success("transcribed text"), result)
             assertEquals("Bearer device-token", server.headers["authorization"])
@@ -38,8 +39,18 @@ class HttpTranscriptionClientTest {
 
         expected.forEach { (status, result) ->
             TestHttpServer(status).use { server ->
-                assertEquals(result, HttpTranscriptionClient(server.url, "token").transcribe(recording("audio")))
+                assertEquals(
+                    result,
+                    HttpTranscriptionClient(server.url, "token", allowInsecure = true).transcribe(recording("audio")),
+                )
             }
+        }
+    }
+
+    @Test
+    fun `rejects cleartext non-local backend`() {
+        assertFailsWith<IllegalArgumentException> {
+            HttpTranscriptionClient("http://example.com/transcribe", "token", allowInsecure = true)
         }
     }
 

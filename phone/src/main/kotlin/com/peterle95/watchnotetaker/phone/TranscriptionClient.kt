@@ -26,11 +26,15 @@ class ManualTranscriptionClient(
 class HttpTranscriptionClient(
     endpoint: String,
     private val deviceToken: String,
+    allowInsecure: Boolean = BuildConfig.DEBUG,
 ) : TranscriptionClient {
     private val endpoint = URL(endpoint)
 
     init {
-        require(this.endpoint.protocol == "https" || this.endpoint.host in setOf("127.0.0.1", "localhost")) {
+        require(
+            this.endpoint.protocol == "https" ||
+                allowInsecure && this.endpoint.host in setOf("127.0.0.1", "localhost", "10.0.2.2"),
+        ) {
             "Transcription endpoint must use HTTPS"
         }
     }

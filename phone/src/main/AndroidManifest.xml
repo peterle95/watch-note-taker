@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:theme="@style/Theme.WatchNoteTaker" android:label="Watch Note Taker" android:allowBackup="false">
+    <application android:theme="@style/Theme.WatchNoteTaker" android:label="Watch Note Taker" android:allowBackup="false" android:usesCleartextTraffic="${allowCleartext}">
         <service android:name=".RecordingReceiverService" android:exported="true">
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.CHANNEL_EVENT" />
