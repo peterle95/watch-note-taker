@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.WatchNoteTaker" parent="android:style/Theme.DeviceDefault" />
+</resources>

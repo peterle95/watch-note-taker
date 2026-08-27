@@ -23,6 +23,7 @@ gradlew.bat test
 
 ## Current scope
 
-This repository does not yet contain Android/Wear OS modules or production adapters. The parent
-MVP still needs device capture, Wear Data Layer transport, backend authentication and bounded
-transcription, vault configuration, permissions/setup, and end-to-end release validation.
+Debug Android modules now exist for the phone and watch, but they are still shell applications.
+The parent MVP still needs real microphone capture, Wear Data Layer transport, backend
+authentication and bounded transcription, vault configuration, permissions/setup, and end-to-end
+release validation.
